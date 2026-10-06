@@ -1,344 +1,300 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback } from "react";
 import {
   View,
   Text,
   ScrollView,
   StyleSheet,
-  SafeAreaView,
-  StatusBar,
   TouchableOpacity,
-  Alert,
-} from 'react-native';
-import { useFocusEffect, useNavigation, type NavigationProp } from '@react-navigation/native';
-import api from '../../config/api';
-import useLocationTracking from '../../hooks/useLocationTracking';
-import LocationPermissionCard from '../../components/LocationPermissionCard';
-import locationService from '../../services/locationService';
+  RefreshControl,
+} from "react-native";
+import { useFocusEffect, useNavigation, type NavigationProp } from "@react-navigation/native";
+import api from "../../config/api";
+import locationService from "../../services/locationService";
+import CosmicBackground from "../../components/common/CosmicBackground";
+import SurfaceCard from "../../components/common/SurfaceCard";
+import ScreenHeader from "../../components/common/ScreenHeader";
+import AppIcon from "../../components/common/AppIcon";
+import ActiveLocationBar from "../../components/common/ActiveLocationBar";
+import { useLocationContext } from "../../context/LocationContext";
+import { StatusBadge } from "../../components/common/StatusIndicator";
+import CustomBottomNav from "../../components/common/CustomBottomNav";
+import { colors, typography, radius, spacing } from "../../theme";
 import type {
   CrowdLocationApiResponse,
   CrowdLocationCardItem,
   CrowdStackParamList,
   CrowdStatus,
-} from './types';
-
-const defaultLocations: CrowdLocationCardItem[] = [];
-
-const levelBadgeStyle = (level: CrowdStatus) => {
-  if (level === 'HIGH') return { bg: '#FEF3C7', text: '#B45309' };
-  if (level === 'MODERATE') return { bg: '#EEF2FF', text: '#4338CA' };
-  return { bg: '#F3F4F6', text: '#374151' };
-};
-
-const LocationCard = ({ item }: { item: CrowdLocationCardItem }) => {
-  const badge = levelBadgeStyle(item.level);
-  const percentText = `${item.percent}% Full`;
-  const percentColor =
-    item.level === 'HIGH' ? '#F59E0B' : item.level === 'MODERATE' ? '#3B82F6' : '#374151';
-
-  return (
-    <View style={styles.card}>
-      <View style={styles.cardHeader}>
-        <Text style={styles.locationName}>{item.name}</Text>
-        <View style={styles.badgeRow}>
-          <View style={[styles.badge, { backgroundColor: badge.bg }]}>
-            <Text style={styles.badgeIcon}>👥 </Text>
-            <Text style={[styles.badgeText, { color: badge.text }]}>{item.level}</Text>
-          </View>
-          <View style={[styles.dot, { backgroundColor: item.dotColor }]} />
-        </View>
-      </View>
-      <View style={styles.statsRow}>
-        <Text style={styles.currentCount}>
-          <Text style={styles.bigNumber}>{item.current}</Text>
-          <Text style={styles.maxNumber}>/{item.max}</Text>
-        </Text>
-        <Text style={[styles.percentText, { color: percentColor }]}>{percentText}</Text>
-      </View>
-      <View style={styles.progressBg}>
-        <View
-          style={[
-            styles.progressFill,
-            { width: `${item.percent}%`, backgroundColor: item.barColor },
-          ]}
-        />
-      </View>
-    </View>
-  );
-};
+} from "./types";
 
 export default function CrowdMonitoringScreen() {
-  const [locations, setLocations] = useState<CrowdLocationCardItem[]>(defaultLocations);
-  const [autoLocationTracking, setAutoLocationTracking] = useState(false);
-  const [locationUpdateInterval, setLocationUpdateInterval] = useState(60000); // 60 seconds
+  const [locations, setLocations] = useState<CrowdLocationCardItem[]>([]);
+  const [loading, setLoading] = useState(false);
   const navigation = useNavigation<NavigationProp<CrowdStackParamList>>();
+  const { activeLocation, isManual } = useLocationContext();
 
-  const {
-    state: locationState,
-    requestPermission,
-    getCurrentLocation,
-    startAutoSend,
-    stopAutoSend,
-  } = useLocationTracking({
-    onLocationUpdate: (coords) => {
-      console.log('Location updated:', coords);
-      // Location is automatically sent to backend via startAutoSend
-    },
-    onError: (error) => {
-      console.error('Location error:', error);
-      // Show error to user
-      if (autoLocationTracking) {
-        Alert.alert('Location Error', error);
-      }
-    },
-  });
-
-  // Fetch crowd locations
   useEffect(() => {
     fetchLocations();
   }, []);
 
-  // Start/stop location tracking when screen is focused
   useFocusEffect(
     useCallback(() => {
-      if (autoLocationTracking) {
-        startAutoSend(locationUpdateInterval);
+      if (activeLocation) {
+        locationService.sendLocationToBackend({
+          latitude: activeLocation.latitude,
+          longitude: activeLocation.longitude,
+          accuracy: activeLocation.accuracy,
+        }).catch(() => {});
       }
-
-      return () => {
-        stopAutoSend();
-      };
-    }, [autoLocationTracking, locationUpdateInterval, startAutoSend, stopAutoSend])
+    }, [activeLocation])
   );
 
   const fetchLocations = async () => {
+    setLoading(true);
     try {
-      const res = await api.get<CrowdLocationApiResponse[]>('/crowd/locations');
+      const res = await api.get<CrowdLocationApiResponse[]>("/crowd/locations");
       if (Array.isArray(res.data)) {
-        const mapped: CrowdLocationCardItem[] = res.data.map((r) => ({
+        const mapped: CrowdLocationCardItem[] = res.data.map((r: CrowdLocationApiResponse) => ({
           name: r.location_name,
           current: r.crowd_count,
           max: r.capacity,
           percent: r.occupancy_percentage,
           level: r.crowd_status,
-          dotColor: r.occupancy_percentage >= 80 ? '#EF4444' : '#10B981',
-          barColor: r.occupancy_percentage >= 80 ? '#F59E0B' : '#3B82F6',
+          dotColor: r.occupancy_percentage >= 80 ? colors.danger : colors.primary,
+          barColor: r.occupancy_percentage >= 80 ? colors.danger : r.occupancy_percentage >= 50 ? colors.cream : colors.primary,
           raw: r,
         }));
-
         setLocations(mapped);
       }
-    } catch (e) {
-      console.log('Failed to fetch crowd locations', e);
+    } catch {
+      // Fallback
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handlePermissionGranted = () => {
-    console.log('Location permission granted');
-    setAutoLocationTracking(true);
-  };
-
-  const handlePermissionDenied = () => {
-    console.log('Location permission denied');
-    setAutoLocationTracking(false);
-  };
-
   const openDetail = (loc: CrowdLocationCardItem) => {
-    navigation.navigate('CrowdLocationDetail', { location: loc.raw });
+    navigation.navigate("CrowdLocationDetail", { location: loc.raw });
   };
-  
+
+  const getStatusType = (level: string) => {
+    if (level === "OVERCROWDED" || level === "HIGH") return "danger";
+    if (level === "MODERATE") return "moderate";
+    return "ready";
+  };
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <StatusBar barStyle="dark-content" backgroundColor="#EEEEF6" />
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
-        <Text style={styles.title}>Crowd Monitoring</Text>
-        <Text style={styles.subtitle}>Real-time occupancy data for popular destinations.</Text>
+    <CosmicBackground>
+      <ScreenHeader
+        title="Crowd Density Radar"
+        subtitle="Live tourist precinct saturation & alerts"
+        showBack
+        onBack={() => navigation.goBack()}
+        rightAction={
+          <TouchableOpacity
+            style={styles.mapHeaderBtn}
+            onPress={() => navigation.navigate("CrowdMap")}
+            accessibilityLabel="Open Map"
+          >
+            <AppIcon name="map-outline" size={18} color={colors.primary} />
+          </TouchableOpacity>
+        }
+      />
 
-        {/* Location Permission Card */}
-        <LocationPermissionCard
-          permissionState={locationState.permissionState}
-          status={locationState.status}
-          onRequestPermission={requestPermission}
-          onPermissionGranted={handlePermissionGranted}
-          onPermissionDenied={handlePermissionDenied}
-          errorMessage={locationState.error}
-          visible={true}
-        />
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={loading}
+            onRefresh={fetchLocations}
+            tintColor={colors.primary}
+            colors={[colors.primary]}
+          />
+        }
+      >
+        {/* ACTIVE LOCATION INDICATOR (GPS VS MANUAL) */}
+        <ActiveLocationBar style={{ marginBottom: 12 }} />
 
-        {/* Status Card */}
-        <View style={styles.statusCard}>
-          <View style={styles.statusRow}>
-            <View
-              style={[
-                styles.activeDot,
-                {
-                  backgroundColor:
-                    locationState.isTracking && autoLocationTracking ? '#10B981' : '#EF4444',
-                },
-              ]}
-            />
-            <Text style={styles.statusTitle}>
-              {locationState.isTracking && autoLocationTracking
-                ? 'Location: Tracking Active'
-                : 'Location: Tracking Inactive'}
-            </Text>
+        {/* HEATMAP SHORTCUT BANNER */}
+        <SurfaceCard
+          style={styles.heatmapBanner}
+          variant="interactive"
+          onPress={() => navigation.navigate("CrowdMap")}
+        >
+          <View style={styles.heatmapRow}>
+            <View style={styles.heatmapIconCircle}>
+              <AppIcon name="map" size={22} color={colors.primary} />
+            </View>
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={typography.h4}>Interactive Safety Heatmap</Text>
+              <Text style={styles.heatmapDesc}>View real-time congestion zones on GPS radar</Text>
+            </View>
+            <AppIcon name="chevron-forward" size={18} color={colors.primary} />
           </View>
-          <View style={styles.statusMeta}>
-            <Text style={styles.metaText}>🕐 Last updated: {locationState.lastUpdateTime ? new Date(locationState.lastUpdateTime).toLocaleTimeString() : 'Never'}</Text>
-            <Text style={styles.metaText}>🕐 Updates every {Math.round(locationUpdateInterval / 1000)}s</Text>
-          </View>
+        </SurfaceCard>
+
+        {/* CROWD LIST TITLE */}
+        <View style={styles.sectionHeader}>
+          <Text style={typography.h3}>Monitored Precincts</Text>
+          <Text style={styles.totalBadge}>{locations.length} Locations</Text>
         </View>
 
-        {/* Location Cards */}
-        {locations.map((item, idx) => (
-          <View key={idx}>
-            <TouchableOpacity onPress={() => openDetail(item)}>
-              <LocationCard item={item} />
-            </TouchableOpacity>
-          </View>
-        ))}
+        {/* LOCATIONS LIST */}
+        {locations.length === 0 && !loading ? (
+          <SurfaceCard style={styles.emptyCard}>
+            <AppIcon name="people-outline" size={28} color={colors.textMuted} />
+            <Text style={styles.emptyTitle}>Scanning Tourist Precincts</Text>
+            <Text style={styles.emptyDesc}>Real-time crowd data is loading for nearby tourist areas.</Text>
+          </SurfaceCard>
+        ) : (
+          locations.map((item, index) => (
+            <SurfaceCard
+              key={index}
+              style={styles.locationCard}
+              onPress={() => openDetail(item)}
+            >
+              <View style={styles.cardHeader}>
+                <View style={{ flex: 1, marginRight: 10 }}>
+                  <Text style={typography.h4}>{item.name}</Text>
+                  <View style={styles.countsRow}>
+                    <AppIcon name="people" size={14} color={colors.textMuted} />
+                    <Text style={styles.countText}>
+                      <Text style={{ color: colors.white, fontWeight: "700" }}>{item.current}</Text> / {item.max} capacity
+                    </Text>
+                  </View>
+                </View>
+                <StatusBadge
+                  label={item.level}
+                  status={getStatusType(item.level)}
+                />
+              </View>
+
+              {/* PROGRESS BAR */}
+              <View style={styles.progressContainer}>
+                <View style={styles.progressTrack}>
+                  <View
+                    style={[
+                      styles.progressFill,
+                      {
+                        width: `${Math.min(item.percent, 100)}%`,
+                        backgroundColor: item.barColor,
+                      },
+                    ]}
+                  />
+                </View>
+                <Text style={[styles.percentLabel, { color: item.barColor }]}>
+                  {item.percent}% Full
+                </Text>
+              </View>
+            </SurfaceCard>
+          ))
+        )}
       </ScrollView>
-    </SafeAreaView>
+
+      {/* BOTTOM NAV */}
+      <CustomBottomNav activeTab="Home" navigation={navigation} />
+    </CosmicBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: '#EEEEF6',
-  },
-  scroll: {
-    flex: 1,
+  mapHeaderBtn: {
+    padding: 8,
   },
   scrollContent: {
-    padding: 20,
-    paddingBottom: 40,
+    paddingHorizontal: spacing.screenPadding,
+    paddingTop: 8,
+    paddingBottom: 28,
   },
-  title: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: '#1E2A5E',
-    marginBottom: 4,
+  heatmapBanner: {
+    marginBottom: 18,
+    padding: 14,
+    borderColor: colors.primaryBorder,
   },
-  subtitle: {
-    fontSize: 14,
-    color: '#6B7280',
-    marginBottom: 20,
+  heatmapRow: {
+    flexDirection: "row",
+    alignItems: "center",
   },
-  statusCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
+  heatmapIconCircle: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: colors.primaryGlow,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  heatmapDesc: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+  sectionHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  totalBadge: {
+    ...typography.caption,
+    color: colors.primary,
+    fontWeight: "700",
+  },
+  locationCard: {
+    marginBottom: 12,
     padding: 16,
-    marginBottom: 16,
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
-  },
-  statusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  activeDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#10B981',
-    marginRight: 8,
-  },
-  statusTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#111827',
-  },
-  statusMeta: {
-    flexDirection: 'row',
-    gap: 20,
-  },
-  metaText: {
-    fontSize: 13,
-    color: '#6B7280',
-    marginRight: 16,
-  },
-  card: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 14,
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
   },
   cardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 10,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    marginBottom: 12,
   },
-  locationName: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#111827',
-  },
-  badgeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  countsRow: {
+    flexDirection: "row",
+    alignItems: "center",
     gap: 6,
+    marginTop: 4,
   },
-  badge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 20,
+  countText: {
+    ...typography.caption,
+    color: colors.textSecondary,
   },
-  badgeIcon: {
-    fontSize: 11,
+  progressContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
   },
-  badgeText: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
-  dot: {
-    width: 9,
-    height: 9,
-    borderRadius: 5,
-    marginLeft: 4,
-  },
-  statsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-end',
-    marginBottom: 10,
-  },
-  currentCount: {
-    flexDirection: 'row',
-  },
-  bigNumber: {
-    fontSize: 30,
-    fontWeight: '800',
-    color: '#1E40AF',
-  },
-  maxNumber: {
-    fontSize: 16,
-    fontWeight: '400',
-    color: '#9CA3AF',
-  },
-  percentText: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  progressBg: {
-    height: 8,
-    backgroundColor: '#E5E7EB',
-    borderRadius: 4,
-    overflow: 'hidden',
+  progressTrack: {
+    flex: 1,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "rgba(255, 255, 255, 0.06)",
+    overflow: "hidden",
   },
   progressFill: {
-    height: 8,
-    borderRadius: 4,
+    height: "100%",
+    borderRadius: 3,
+  },
+  percentLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    minWidth: 54,
+    textAlign: "right",
+  },
+  emptyCard: {
+    padding: 28,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  emptyTitle: {
+    ...typography.h4,
+    color: colors.white,
+    marginTop: 8,
+  },
+  emptyDesc: {
+    ...typography.caption,
+    color: colors.textMuted,
+    textAlign: "center",
   },
 });

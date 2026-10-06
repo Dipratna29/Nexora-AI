@@ -1,12 +1,12 @@
-import time
-from datetime import datetime, timedelta
-from database import get_db_connection
-from config import Config
+# crowd_service.py
+
 import math
+from datetime import datetime, timedelta, timezone
+from database import get_supabase
 
 
 def haversine(lat1, lon1, lat2, lon2):
-    # returns distance in meters
+    """Returns distance in meters between two lat/lon coordinates."""
     R = 6371000
     phi1 = math.radians(lat1)
     phi2 = math.radians(lat2)
@@ -20,60 +20,61 @@ def haversine(lat1, lon1, lat2, lon2):
 
 
 def get_update_interval_minutes():
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT value FROM crowd_settings WHERE `key`='update_interval_minutes' LIMIT 1")
-    row = cursor.fetchone()
-    cursor.close()
-    conn.close()
-
-    if row and row.get("value"):
+    """Fetches crowd monitoring update interval in minutes from settings."""
+    supabase = get_supabase()
+    res = supabase.table("crowd_settings").select("value").eq("key", "update_interval_minutes").limit(1).execute()
+    if res.data:
         try:
-            return int(row["value"])
+            return int(res.data[0]["value"])
         except Exception:
             return 30
-
     return 30
 
 
 def set_crowd_setting(key: str, value: str):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT COUNT(*) FROM crowd_settings WHERE `key`=%s", (key,))
-    exists = cursor.fetchone()[0] > 0
-
-    if exists:
-        cursor.execute("UPDATE crowd_settings SET `value`=%s WHERE `key`=%s", (value, key))
-    else:
-        cursor.execute("INSERT INTO crowd_settings (`key`, `value`) VALUES (%s, %s)", (key, value))
-
-    conn.commit()
-    cursor.close()
-    conn.close()
+    """Sets or updates a crowd monitoring configuration setting."""
+    supabase = get_supabase()
+    supabase.table("crowd_settings").upsert({"key": key, "value": str(value)}, on_conflict="key").execute()
 
 
 def get_locations_with_counts():
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-
-    cursor.execute("SELECT * FROM geo_locations")
-    locations = cursor.fetchall()
+    """
+    Returns monitored geo locations with real-time crowd metrics and occupancy status.
+    """
+    supabase = get_supabase()
+    loc_res = supabase.table("geo_locations").select("*").order("location_id").execute()
+    locations = loc_res.data or []
 
     interval = get_update_interval_minutes()
-    cutoff = datetime.utcnow() - timedelta(minutes=interval)
+    cutoff_dt = datetime.now(timezone.utc) - timedelta(minutes=interval)
+    cutoff_iso = cutoff_dt.isoformat()
+
+    # Fetch recent user locations to aggregate active users per location
+    seen_res = (
+        supabase.table("user_locations")
+        .select("user_id, location_id")
+        .gte("seen_at", cutoff_iso)
+        .execute()
+    )
+
+    # Group distinct user_ids by location_id
+    users_by_loc = {}
+    for entry in seen_res.data or []:
+        loc_id = entry.get("location_id")
+        uid = entry.get("user_id")
+        if loc_id is not None and uid is not None:
+            if loc_id not in users_by_loc:
+                users_by_loc[loc_id] = set()
+            users_by_loc[loc_id].add(uid)
 
     results = []
     for loc in locations:
-        cursor.execute(
-            "SELECT COUNT(DISTINCT user_id) as crowd_count FROM user_locations WHERE location_id=%s AND seen_at >= %s",
-            (loc["location_id"], cutoff)
-        )
-        cnt = cursor.fetchone().get("crowd_count") or 0
+        loc_id = loc["location_id"]
+        cnt = len(users_by_loc.get(loc_id, set()))
+        capacity = loc.get("capacity") or 1000
 
-        occupancy = 0
         try:
-            occupancy = round((cnt / max(1, loc.get("capacity", 1))) * 100)
+            occupancy = round((cnt / max(1, capacity)) * 100)
         except Exception:
             occupancy = 0
 
@@ -86,60 +87,68 @@ def get_locations_with_counts():
             status = "MODERATE"
 
         results.append({
-            "location_id": loc["location_id"],
+            "location_id": loc_id,
             "location_name": loc["location_name"],
-            "latitude": loc["latitude"],
-            "longitude": loc["longitude"],
-            "radius_meters": loc["radius_meters"],
-            "capacity": loc.get("capacity", 1000),
+            "latitude": float(loc["latitude"]),
+            "longitude": float(loc["longitude"]),
+            "radius_meters": int(loc.get("radius_meters", 500)),
+            "capacity": int(capacity),
             "crowd_count": int(cnt),
             "occupancy_percentage": int(occupancy),
             "crowd_status": status,
-            "last_updated": cutoff.isoformat() + "Z",
+            "last_updated": cutoff_iso,
         })
-
-    cursor.close()
-    conn.close()
 
     return results
 
 
 def record_user_location(user_id, lat, lon):
-    # determine if inside any monitored location
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+    """
+    Records a user GPS ping, checks for geofence overlap, and records a snapshot if inside.
+    """
+    user_id = int(user_id)
+    lat = float(lat)
+    lon = float(lon)
 
-    cursor.execute("SELECT * FROM geo_locations")
-    locations = cursor.fetchall()
+    supabase = get_supabase()
+    loc_res = supabase.table("geo_locations").select("*").execute()
+    locations = loc_res.data or []
 
-    matched_location_id = None
+    matched_location = None
     for loc in locations:
         dist = haversine(lat, lon, float(loc["latitude"]), float(loc["longitude"]))
-        if dist <= float(loc["radius_meters"]):
-            matched_location_id = loc["location_id"]
+        if dist <= float(loc.get("radius_meters", 500)):
+            matched_location = loc
             break
 
-    # insert into user_locations
-    cursor.execute(
-        "INSERT INTO user_locations (user_id, latitude, longitude, location_id, seen_at) VALUES (%s, %s, %s, %s, %s)",
-        (user_id, lat, lon, matched_location_id, datetime.utcnow())
-    )
-    conn.commit()
+    matched_location_id = matched_location["location_id"] if matched_location else None
+    now_iso = datetime.now(timezone.utc).isoformat()
 
-    # if matched, update a crowd snapshot for that location (simple authoritative calc)
-    if matched_location_id:
-        cursor.execute(
-            "SELECT COUNT(DISTINCT user_id) as crowd_count FROM user_locations WHERE location_id=%s AND seen_at >= %s",
-            (matched_location_id, datetime.utcnow() - timedelta(minutes=get_update_interval_minutes()))
+    # Insert into user_locations
+    supabase.table("user_locations").insert({
+        "user_id": user_id,
+        "latitude": lat,
+        "longitude": lon,
+        "location_id": matched_location_id,
+        "seen_at": now_iso
+    }).execute()
+
+    # If matched, create crowd snapshot
+    if matched_location:
+        interval = get_update_interval_minutes()
+        cutoff_iso = (datetime.now(timezone.utc) - timedelta(minutes=interval)).isoformat()
+
+        recent_res = (
+            supabase.table("user_locations")
+            .select("user_id")
+            .eq("location_id", matched_location_id)
+            .gte("seen_at", cutoff_iso)
+            .execute()
         )
-        cnt = cursor.fetchone().get("crowd_count") or 0
-
-        # get capacity
-        cursor.execute("SELECT capacity FROM geo_locations WHERE location_id=%s", (matched_location_id,))
-        capacity_row = cursor.fetchone() or {"capacity": 1}
-        cap = capacity_row.get("capacity") or 1
-
-        occupancy = int(round((cnt / max(1, cap)) * 100))
+        unique_users = {r["user_id"] for r in (recent_res.data or []) if r.get("user_id") is not None}
+        cnt = len(unique_users)
+        capacity = matched_location.get("capacity") or 1000
+        occupancy = int(round((cnt / max(1, capacity)) * 100))
 
         status = "LOW"
         if occupancy >= 100:
@@ -149,27 +158,25 @@ def record_user_location(user_id, lat, lon):
         elif occupancy >= 40:
             status = "MODERATE"
 
-        cursor.execute(
-            "INSERT INTO crowd_snapshots (location_id, crowd_count, capacity, occupancy_percentage, crowd_status, created_at) VALUES (%s, %s, %s, %s, %s, %s)",
-            (matched_location_id, int(cnt), cap, occupancy, status, datetime.utcnow())
-        )
-        conn.commit()
-
-    cursor.close()
-    conn.close()
+        supabase.table("crowd_snapshots").insert({
+            "location_id": matched_location_id,
+            "crowd_count": int(cnt),
+            "capacity": int(capacity),
+            "occupancy_percentage": occupancy,
+            "crowd_status": status,
+            "created_at": now_iso
+        }).execute()
 
 
 def get_location_history(location_id, limit=100):
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-
-    cursor.execute(
-        "SELECT location_id, crowd_count, capacity, occupancy_percentage, crowd_status, created_at FROM crowd_snapshots WHERE location_id=%s ORDER BY created_at DESC LIMIT %s",
-        (location_id, limit)
+    """Fetch crowd snapshot history for a location."""
+    supabase = get_supabase()
+    res = (
+        supabase.table("crowd_snapshots")
+        .select("location_id, crowd_count, capacity, occupancy_percentage, crowd_status, created_at")
+        .eq("location_id", int(location_id))
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
     )
-    rows = cursor.fetchall()
-
-    cursor.close()
-    conn.close()
-
-    return rows
+    return res.data or []

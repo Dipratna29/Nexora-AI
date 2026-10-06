@@ -1,478 +1,291 @@
 import React, { useState, useEffect } from "react";
-import { View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, Platform } from "react-native";
-import { LinearGradient } from "expo-linear-gradient";
-import { Ionicons } from "@expo/vector-icons";
+import {
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  TextInput,
+  TouchableOpacity,
+  RefreshControl,
+} from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import api from "../config/api";
+import CosmicBackground from "../components/common/CosmicBackground";
+import SurfaceCard from "../components/common/SurfaceCard";
+import ScreenHeader from "../components/common/ScreenHeader";
+import AppIcon from "../components/common/AppIcon";
+import { StatusBadge } from "../components/common/StatusIndicator";
+import CustomBottomNav from "../components/common/CustomBottomNav";
+import { colors, typography, radius, spacing } from "../theme";
 
-// ---------------------------------------------------------------------------
-// TrustTrip design tokens (from DESIGN.md)
-// ---------------------------------------------------------------------------
-const colors = {
-  surface: "#f8f9ff",
-  surfaceContainerLowest: "#ffffff",
-  surfaceContainerLow: "#eff4ff",
-  surfaceContainer: "#e5eeff",
-  surfaceContainerHigh: "#dce9ff",
-  onSurface: "#0b1c30",
-  onSurfaceVariant: "#444651",
-  outlineVariant: "#c5c5d3",
-  primary: "#00236f",
-  onPrimary: "#ffffff",
-  primaryContainer: "#1e3a8a",
-  secondary: "#006c49",
-  secondaryContainer: "#6cf8bb",
-  onSecondaryContainer: "#00714d",
-  error: "#ba1a1a",
-  onError: "#ffffff",
-};
-
-const typography = {
-  headlineLg: { fontFamily: "Inter", fontSize: 26, fontWeight: "700" as const, letterSpacing: -0.3 },
-  headlineMd: { fontFamily: "Inter", fontSize: 20, fontWeight: "700" as const, letterSpacing: -0.1 },
-  bodyMd: { fontFamily: "Inter", fontSize: 14, fontWeight: "400" as const, lineHeight: 21 },
-  labelMd: { fontFamily: "Inter", fontSize: 14, fontWeight: "700" as const },
-  labelSm: { fontFamily: "Inter", fontSize: 11, fontWeight: "700" as const, letterSpacing: 0.6 },
-};
-
-const spacing = { base: 4, xs: 8, sm: 16, md: 24, lg: 40, marginMobile: 20 };
-const radius = { sm: 4, DEFAULT: 8, md: 12, lg: 16, xl: 24, full: 9999 };
-
-const ambientShadow = {
-  shadowColor: colors.primary,
-  shadowOffset: { width: 0, height: 8 },
-  shadowOpacity: 0.08,
-  shadowRadius: 20,
-  elevation: 4,
-};
-
-const TABS: { key: string; label: string; icon: keyof typeof Ionicons.glyphMap; screen: string }[] = [
-  { key: "Home", label: "Home", icon: "home-outline", screen: "Home" },
-  { key: "Explore", label: "Explore", icon: "compass-outline", screen: "Guide" },
-  { key: "Reports", label: "Reports", icon: "shield-outline", screen: "MyComplaints" },
-  { key: "Profile", label: "Profile", icon: "person-outline", screen: "Profile" },
+const CATEGORY_OPTIONS = [
+  { label: "Tourist Hub", value: "Tourist", mult: 1.5 },
+  { label: "Municipal", value: "Municipal", mult: 1.0 },
+  { label: "Highway", value: "Highway", mult: 1.3 },
+  { label: "Rural", value: "Rural", mult: 0.8 },
 ];
-
-// Presentation-only: chip options mirror the original Picker's items exactly
-// (same values, same labels) — just rendered as selectable chips instead of
-// a native dropdown. Selecting one still calls setCategory(value) below.
-const CATEGORY_OPTIONS: { label: string; value: string; icon: keyof typeof Ionicons.glyphMap }[] = [
-  { label: "Municipal", value: "Municipal", icon: "business-outline" },
-  { label: "Tourist", value: "Tourist", icon: "airplane-outline" },
-  { label: "Highway", value: "Highway", icon: "car-outline" },
-  { label: "Rural", value: "Rural", icon: "leaf-outline" },
-];
-
-const iconForProduct = (name: string): keyof typeof Ionicons.glyphMap => {
-  const n = name.toLowerCase();
-  if (n.includes("water")) return "water-outline";
-  if (n.includes("coffee") || n.includes("tea")) return "cafe-outline";
-  if (n.includes("taxi") || n.includes("cab")) return "car-outline";
-  if (n.includes("metro") || n.includes("bus") || n.includes("transit")) return "subway-outline";
-  if (n.includes("food") || n.includes("meal")) return "restaurant-outline";
-  return "pricetag-outline";
-};
 
 export default function PriceCheckScreen() {
   const navigation = useNavigation<any>();
-
-  // --- Backend logic (unchanged) --------------------------------------------
-  const [location, setLocation] = useState("");
-  const [category, setCategory] = useState("Tourist"); // DEFAULT
+  const [category, setCategory] = useState("Tourist");
   const [prices, setPrices] = useState<any[]>([]);
   const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     fetchPrices();
   }, []);
 
   const fetchPrices = async () => {
+    setLoading(true);
     try {
       const res = await api.get("/prices");
-      const data = res.data;
-
-      setPrices(data);
-    } catch (error) {
-      console.log("Price fetch error:", error);
+      if (Array.isArray(res.data)) {
+        setPrices(res.data);
+      }
+    } catch {
+      // Fallback
+    } finally {
+      setLoading(false);
     }
   };
 
-  // ---------------- CATEGORY MULTIPLIER ----------------
   const getMultiplier = () => {
-    switch (category) {
-      case "Municipal":
-        return 1;
-
-      case "Tourist":
-        return 1.5;
-
-      case "Highway":
-        return 1.3;
-
-      case "Rural":
-        return 0.8;
-
-      default:
-        return 1;
-    }
+    const opt = CATEGORY_OPTIONS.find((o) => o.value === category);
+    return opt?.mult ?? 1.0;
   };
 
   const multiplier = getMultiplier();
 
-  // ---------------- SEARCH FILTER ----------------
   const filteredPrices = prices.filter((item) =>
-    item.name.toLowerCase().includes(search.toLowerCase())
+    (item.name || "").toLowerCase().includes(search.toLowerCase())
   );
-  // --- End backend logic -----------------------------------------------------
 
- return (
-  <View style={styles.screen}>
-
-    {/* HERO */}
-    <LinearGradient
-      colors={[colors.primary, colors.primaryContainer]}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-      style={styles.heroCard}
-    >
-      <View style={styles.protocolChip}>
-        <Ionicons
-          name="shield-checkmark"
-          size={12}
-          color={colors.secondaryContainer}
-        />
-        <Text style={styles.protocolChipText}>
-          FAIR TRADE PROTOCOL
-        </Text>
-      </View>
-
-      <Text style={styles.title}>Price Transparency</Text>
-
-      <Text style={styles.heroSubtitle}>
-        Check fair prices across different regions to avoid being
-        overcharged. Our data is updated daily by community reports.
-      </Text>
-    </LinearGradient>
-
-    {/* SEARCH */}
-    <View style={styles.searchWrap}>
-      <View style={styles.searchBar}>
-        <Ionicons
-          name="search"
-          size={18}
-          color={colors.onSurfaceVariant}
-        />
-
-        <TextInput
-          placeholder="Search products (e.g. Water, Coffee, Taxi)"
-          placeholderTextColor={colors.onSurfaceVariant}
-          style={styles.searchInput}
-          value={search}
-          onChangeText={setSearch}
-        />
-      </View>
-    </View>
-
-    {/* CATEGORY CHIPS */}
-    <View style={styles.chipRow}>
-      {CATEGORY_OPTIONS.map((opt) => {
-        const active = category === opt.value;
-
-        return (
-          <TouchableOpacity
-            key={opt.value}
-            style={[
-              styles.chip,
-              active && styles.chipActive,
-            ]}
-            onPress={() => setCategory(opt.value)}
-            activeOpacity={0.8}
-          >
-            <Ionicons
-              name={opt.icon}
-              size={14}
-              color={
-                active
-                  ? colors.onPrimary
-                  : colors.primary
-              }
-            />
-
-            <Text
-              style={[
-                styles.chipText,
-                active && styles.chipTextActive,
-              ]}
-            >
-              {opt.label}
-            </Text>
+  return (
+    <CosmicBackground>
+      <ScreenHeader
+        title="Fair Price Radar"
+        subtitle="Transparent benchmarks to avoid tourist overpricing"
+        showBack
+        onBack={() => navigation.goBack()}
+        rightAction={
+          <TouchableOpacity onPress={fetchPrices} style={{ padding: 8 }}>
+            <AppIcon name="refresh" size={18} color={colors.primary} />
           </TouchableOpacity>
-        );
-      })}
-    </View>
+        }
+      />
 
-    {/* PRODUCT LIST */}
-    <FlatList
-      data={filteredPrices}
-      keyExtractor={(item) => item.id.toString()}
-      showsVerticalScrollIndicator={false}
-      contentContainerStyle={styles.listContent}
-      renderItem={({ item }) => {
-        const adjustedPrice = Math.round(
-          item.base_price * multiplier
-        );
+      <View style={styles.container}>
+        {/* SEARCH BAR */}
+        <View style={styles.searchContainer}>
+          <AppIcon name="search" size={18} color={colors.textMuted} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search items: water, taxi, tea, food..."
+            placeholderTextColor={colors.textMuted}
+            value={search}
+            onChangeText={setSearch}
+          />
+          {search.length > 0 && (
+            <TouchableOpacity onPress={() => setSearch("")}>
+              <AppIcon name="close-circle" size={18} color={colors.textMuted} />
+            </TouchableOpacity>
+          )}
+        </View>
 
-        const lowRange = Math.round(adjustedPrice * 0.9);
-        const highRange = Math.round(adjustedPrice * 1.1);
-
-        return (
-          <View style={styles.card}>
-            <View style={styles.cardTopRow}>
-              <View style={styles.productIconWrap}>
-                <Ionicons
-                  name={iconForProduct(item.name)}
-                  size={20}
-                  color={colors.primary}
-                />
-              </View>
-
-              <View style={styles.fairPriceBadge}>
-                <Text style={styles.fairPriceText}>
-                  {item.priceType ?? "Fair Price"}
+        {/* REGIONAL ZONE FILTER */}
+        <View style={styles.zoneFilterRow}>
+          {CATEGORY_OPTIONS.map((opt) => {
+            const isSel = category === opt.value;
+            return (
+              <TouchableOpacity
+                key={opt.value}
+                style={[styles.zoneChip, isSel && styles.zoneChipActive]}
+                onPress={() => setCategory(opt.value)}
+              >
+                <Text style={[styles.zoneText, isSel && styles.zoneTextActive]}>
+                  {opt.label}
                 </Text>
-              </View>
-            </View>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
 
-            <Text style={styles.productName}>
-              {item.name}
-            </Text>
+        {/* LIST */}
+        <FlatList
+          data={filteredPrices}
+          keyExtractor={(item, index) => item.id ? String(item.id) : String(index)}
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={loading}
+              onRefresh={fetchPrices}
+              tintColor={colors.primary}
+              colors={[colors.primary]}
+            />
+          }
+          ListEmptyComponent={
+            <SurfaceCard style={styles.emptyCard}>
+              <AppIcon name="pricetag-outline" size={32} color={colors.textMuted} />
+              <Text style={styles.emptyTitle}>No Price Items</Text>
+              <Text style={styles.emptyDesc}>No benchmarks found matching "{search}".</Text>
+            </SurfaceCard>
+          }
+          renderItem={({ item }) => {
+            const base = Number(item.price || item.base_price || 20);
+            const calculated = Math.round(base * multiplier);
 
-            {!!item.category && (
-              <Text style={styles.productCategory}>
-                {item.category}
-              </Text>
-            )}
+            return (
+              <SurfaceCard style={styles.priceCard} variant="elevated">
+                <View style={styles.itemRow}>
+                  <View style={styles.iconWrap}>
+                    <AppIcon name="pricetag" size={20} color={colors.primary} />
+                  </View>
+                  <View style={{ flex: 1, marginLeft: 12 }}>
+                    <Text style={typography.h4}>{item.name}</Text>
+                    <Text style={styles.baseText}>Base rate: ₹{base}</Text>
+                  </View>
+                  <View style={styles.priceCol}>
+                    <Text style={styles.priceValue}>₹{calculated}</Text>
+                    <Text style={styles.fairTag}>FAIR LIMIT</Text>
+                  </View>
+                </View>
 
-            <Text style={styles.priceText}>
-              ${adjustedPrice}
-              <Text style={styles.priceSuffix}>
-                {" "}Allowed Price
-              </Text>
-            </Text>
+                <View style={styles.cardFooter}>
+                  <StatusBadge label="VERIFIED BENCHMARK" status="ready" />
+                  <Text style={styles.zoneNote}>Zone multiplier applied ({multiplier}x)</Text>
+                </View>
+              </SurfaceCard>
+            );
+          }}
+        />
+      </View>
 
-            <View style={styles.rangeRow}>
-              <Text style={styles.rangeLabel}>
-                Acceptable Range
-              </Text>
-
-              <Text style={styles.rangeValue}>
-                ${lowRange} - ${highRange}
-              </Text>
-            </View>
-          </View>
-        );
-      }}
-    />
-
-  </View>
-);
+      {/* BOTTOM NAV */}
+      <CustomBottomNav activeTab="Home" navigation={navigation} />
+    </CosmicBackground>
+  );
 }
 
 const styles = StyleSheet.create({
-  screen: {
+  container: {
     flex: 1,
+    paddingHorizontal: spacing.screenPadding,
+  },
+  searchContainer: {
+    flexDirection: "row",
+    alignItems: "center",
     backgroundColor: colors.surface,
-  },
-
-  // --- Hero ------------------------------------------------------------------
-  heroCard: {
-    paddingHorizontal: spacing.marginMobile,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.lg,
-    borderBottomLeftRadius: radius.xl + spacing.sm,
-    borderBottomRightRadius: radius.xl + spacing.sm,
-  },
-
-  protocolChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    alignSelf: "flex-start",
-    gap: spacing.base,
-    backgroundColor: "rgba(255,255,255,0.15)",
+    borderRadius: radius.pill,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.2)",
-    borderRadius: radius.full,
-    paddingHorizontal: spacing.xs,
-    paddingVertical: spacing.base,
-    marginBottom: spacing.sm,
+    borderColor: colors.border,
+    marginTop: 8,
+    marginBottom: 12,
   },
-
-  protocolChipText: {
-    ...typography.labelSm,
-    fontSize: 10,
-    color: colors.secondaryContainer,
-  },
-
-  title: {
-    ...typography.headlineLg,
-    color: colors.onPrimary,
-  },
-
-  heroSubtitle: {
-    ...typography.bodyMd,
-    color: "#c7d5ff",
-    marginTop: spacing.xs,
-  },
-
-  // --- Search bar (overlaps hero seam) ----------------------------------------
-  searchWrap: {
-    marginHorizontal: spacing.marginMobile,
-    marginTop: -radius.xl,
-    marginBottom: spacing.sm,
-  },
-
-  searchBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.xs,
-    backgroundColor: colors.surfaceContainerLowest,
-    borderRadius: radius.lg,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.sm,
-    ...ambientShadow,
-  },
-
   searchInput: {
     flex: 1,
-    fontSize: 15,
-    color: colors.onSurface,
+    color: colors.textPrimary,
+    fontSize: 14,
+    paddingHorizontal: 10,
   },
-
-  // --- Category chips ------------------------------------------------------------
-  chipRow: {
+  zoneFilterRow: {
     flexDirection: "row",
-    flexWrap: "wrap",
-    gap: spacing.xs,
-    marginHorizontal: spacing.marginMobile,
-    marginBottom: spacing.md,
+    gap: 8,
+    marginBottom: 14,
   },
-
-  chip: {
+  zoneChip: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  zoneChipActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  zoneText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: "700",
+    fontSize: 11,
+  },
+  zoneTextActive: {
+    color: colors.background,
+    fontWeight: "800",
+  },
+  listContent: {
+    paddingBottom: 32,
+  },
+  priceCard: {
+    padding: 16,
+    marginBottom: 10,
+  },
+  itemRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.base,
-    backgroundColor: colors.surfaceContainerHigh,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-    borderRadius: radius.full,
   },
-
-  chipActive: {
-    backgroundColor: colors.primary,
-  },
-
-  chipText: {
-    ...typography.labelMd,
-    fontSize: 13,
-    color: colors.primary,
-  },
-
-  chipTextActive: {
-    color: colors.onPrimary,
-  },
-
-  // --- Product cards -----------------------------------------------------------------
-  listContent: {
-    paddingBottom: spacing.lg,
-  },
-
-  card: {
-    backgroundColor: colors.surfaceContainerLowest,
-    borderRadius: radius.xl,
-    padding: spacing.md,
-    marginHorizontal: spacing.marginMobile,
-    marginBottom: spacing.sm,
-    ...ambientShadow,
-  },
-
-  cardTopRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: spacing.sm,
-  },
-
-  productIconWrap: {
+  iconWrap: {
     width: 40,
     height: 40,
-    borderRadius: radius.md,
-    backgroundColor: colors.surfaceContainerHigh,
+    borderRadius: 14,
+    backgroundColor: `${colors.primary}18`,
     alignItems: "center",
     justifyContent: "center",
   },
-
-  fairPriceBadge: {
-    backgroundColor: colors.secondaryContainer,
-    paddingHorizontal: spacing.xs,
-    paddingVertical: 3,
-    borderRadius: radius.full,
-  },
-
-  fairPriceText: {
-    ...typography.labelSm,
-    fontSize: 10,
-    color: colors.onSecondaryContainer,
-  },
-
-  productName: {
-    ...typography.headlineMd,
-    fontSize: 17,
-    color: colors.onSurface,
-  },
-
-  productCategory: {
-    ...typography.bodyMd,
-    fontSize: 13,
-    color: colors.onSurfaceVariant,
+  baseText: {
+    ...typography.caption,
+    color: colors.textMuted,
     marginTop: 2,
   },
-
-  priceText: {
-    ...typography.headlineMd,
-    fontSize: 22,
-    color: colors.secondary,
-    marginTop: spacing.sm,
+  priceCol: {
+    alignItems: "flex-end",
   },
-
-  priceSuffix: {
-    ...typography.bodyMd,
-    fontSize: 13,
-    fontWeight: "400",
-    color: colors.onSurfaceVariant,
+  priceValue: {
+    ...typography.h3,
+    color: colors.primary,
+    fontSize: 20,
+    fontWeight: "800",
   },
-
-  rangeRow: {
+  fairTag: {
+    fontSize: 9,
+    fontWeight: "800",
+    color: colors.cream,
+    letterSpacing: 0.5,
+  },
+  cardFooter: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    backgroundColor: colors.surfaceContainerLow,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-    marginTop: spacing.sm,
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
   },
-
-  rangeLabel: {
-    ...typography.bodyMd,
-    fontSize: 13,
-    color: colors.onSurfaceVariant,
+  zoneNote: {
+    ...typography.caption,
+    fontSize: 10,
+    color: colors.textMuted,
   },
-
-  rangeValue: {
-    ...typography.labelMd,
-    fontSize: 13,
-    color: colors.onSurface,
+  emptyCard: {
+    padding: 32,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 20,
+    gap: 8,
   },
-
-
+  emptyTitle: {
+    ...typography.h3,
+    color: colors.white,
+    marginTop: 8,
+  },
+  emptyDesc: {
+    ...typography.caption,
+    color: colors.textMuted,
+    textAlign: "center",
+  },
 });

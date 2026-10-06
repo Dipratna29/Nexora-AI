@@ -3,311 +3,299 @@ import {
   View,
   Text,
   StyleSheet,
-  FlatList,
-  Image,
   TouchableOpacity,
-  SafeAreaView,
-  StatusBar,
+  ScrollView,
+  Linking,
+  Dimensions,
 } from "react-native";
 import { useNavigation } from "@react-navigation/native";
+import CosmicBackground from "../../components/common/CosmicBackground";
+import SurfaceCard from "../../components/common/SurfaceCard";
+import ScreenHeader from "../../components/common/ScreenHeader";
+import AppIcon from "../../components/common/AppIcon";
+import { StatusBadge } from "../../components/common/StatusIndicator";
+import CustomBottomNav from "../../components/common/CustomBottomNav";
+import ActiveLocationBar from "../../components/common/ActiveLocationBar";
+import { useLocationContext } from "../../context/LocationContext";
+import { colors, typography, radius, spacing } from "../../theme";
 
-const facilities = [
+const { width } = Dimensions.get("window");
+
+const FACILITIES = [
   {
     id: "1",
-    name: "Women Washroom",
-    image: "https://cdn-icons-png.flaticon.com/512/747/747376.png",
+    name: "Women Safe Restroom",
+    category: "Verified Amenity",
+    distance: "0.4 km",
     available: true,
+    icon: "shield-checkmark",
     statusLabel: "AVAILABLE",
   },
   {
     id: "2",
-    name: "Baby Feeding",
-    image: "https://cdn-icons-png.flaticon.com/512/2922/2922510.png",
+    name: "Mother & Baby Care Room",
+    category: "Comfort Station",
+    distance: "0.8 km",
     available: true,
+    icon: "heart",
     statusLabel: "AVAILABLE",
   },
   {
     id: "3",
-    name: "Changing Room",
-    image: "https://cdn-icons-png.flaticon.com/512/684/684908.png",
+    name: "Transit Changing Station",
+    category: "Rest Station",
+    distance: "1.2 km",
     available: false,
-    statusLabel: "FULL",
+    icon: "cube",
+    statusLabel: "OCCUPIED",
   },
-  
+  {
+    id: "4",
+    name: "Tourist Police Help Post",
+    category: "24/7 Security",
+    distance: "0.3 km",
+    available: true,
+    icon: "shield",
+    statusLabel: "ON DUTY",
+  },
 ];
 
 export default function WomenSafetyScreen() {
   const navigation = useNavigation<any>();
+  const { activeLocation, isManual } = useLocationContext();
 
-  const renderItem = ({ item }: { item: typeof facilities[0] }) => (
-    <TouchableOpacity
-      activeOpacity={0.85}
-      style={styles.card}
-      onPress={() => navigation.navigate("WomenSafetyDetail", { facility: item })}
-    >
-      <View style={styles.iconCircle}>
-        <Image source={{ uri: item.image }} style={styles.image} />
-      </View>
-
-      <Text style={styles.cardName}>{item.name}</Text>
-
-      <View style={styles.statusRow}>
-        <View
-          style={[
-            styles.statusDot,
-            { backgroundColor: item.available ? "#16A34A" : "#DC2626" },
-          ]}
-        />
-        <Text
-          style={[
-            styles.statusText,
-            { color: item.available ? "#16A34A" : "#DC2626" },
-          ]}
-        >
-          {item.statusLabel}
-        </Text>
-      </View>
-    </TouchableOpacity>
-  );
+  const callNumber = (number: string) => {
+    Linking.openURL(`tel:${number}`).catch(() => {});
+  };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="dark-content" backgroundColor="#F8F0FF" />
+    <CosmicBackground>
+      <ScreenHeader
+        title="Women Safety Guardian"
+        subtitle="Verified safe zones, helplines & amenities"
+        showBack
+        onBack={() => navigation.goBack()}
+      />
 
-      {/* ── PINK HERO HEADER ── */}
-      <View style={styles.heroHeader}>
-        <Text style={styles.heroTitle}>Women Safety</Text>
-        <Text style={styles.heroSubtitle}>
-          Explore nearby women-friendly facilities, verified services, and safe travel routes.
-        </Text>
-      </View>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+      >
+        {/* ACTIVE LOCATION INDICATOR (GPS VS MANUAL) */}
+        <ActiveLocationBar style={{ marginBottom: 12 }} />
 
-      {/* ── WHITE SHEET ── */}
-      <View style={styles.sheet}>
-        {/* Pull handle */}
-        <View style={styles.pullHandle} />
-
-        {/* Section header */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Verified Facilities</Text>
-          <View style={styles.nearbyBadge}>
-            <Text style={styles.nearbyText}>12 Nearby</Text>
+        {/* 24/7 HELPLINE EMERGENCY BAR */}
+        <SurfaceCard style={styles.helplineCard} variant="elevated">
+          <View style={styles.helplineHeader}>
+            <View style={styles.helplineIconCircle}>
+              <AppIcon name="call" size={20} color={colors.primary} />
+            </View>
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={typography.h4}>24/7 Dedicated Helplines</Text>
+              <Text style={styles.helplineSub}>Instant connection to verified response units</Text>
+            </View>
           </View>
+
+          <View style={styles.helplineBtnsRow}>
+            <TouchableOpacity
+              style={styles.helplineBtn}
+              onPress={() => callNumber("1091")}
+              activeOpacity={0.8}
+            >
+              <AppIcon name="call" size={16} color={colors.background} />
+              <Text style={styles.helplineBtnText}>1091 (Women Help)</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.helplineBtn, { backgroundColor: colors.cream }]}
+              onPress={() => callNumber("112")}
+              activeOpacity={0.8}
+            >
+              <AppIcon name="shield" size={16} color={colors.background} />
+              <Text style={styles.helplineBtnText}>112 (National SOS)</Text>
+            </TouchableOpacity>
+          </View>
+        </SurfaceCard>
+
+        {/* VERIFIED SAFE FACILITIES */}
+        <View style={styles.sectionHeader}>
+          <Text style={typography.h3}>Verified Safe Locations</Text>
+          <Text style={styles.countBadge}>{FACILITIES.length} Nearby</Text>
         </View>
 
-        <FlatList
-          data={facilities}
-          numColumns={2}
-          keyExtractor={(item) => item.id}
-          showsVerticalScrollIndicator={false}
-          columnWrapperStyle={styles.row}
-          contentContainerStyle={styles.listContent}
-          renderItem={renderItem}
-          ListFooterComponent={
-            <View style={styles.safeRouteCard}>
-              <Text style={styles.safeRouteTitle}>Safe Travel Route</Text>
-              <Text style={styles.safeRouteDesc}>
-                Your current path is 98% safe based on verified community reports and active police
-                patrolling.
-              </Text>
-              {/* Map placeholder */}
-              <View style={styles.mapPlaceholder}>
-                <Text style={styles.mapText}>🗺️</Text>
+        <View style={styles.facilitiesGrid}>
+          {FACILITIES.map((facility) => (
+            <SurfaceCard
+              key={facility.id}
+              style={styles.facilityCard}
+              onPress={() => navigation.navigate("WomenSafetyDetail", { facility })}
+            >
+              <View style={styles.facilityTopRow}>
+                <View style={styles.facilityIconWrap}>
+                  <AppIcon name={facility.icon} size={20} color={colors.primary} />
+                </View>
+                <StatusBadge
+                  label={facility.statusLabel}
+                  status={facility.available ? "ready" : "moderate"}
+                />
               </View>
-            </View>
-          }
-        />
-      </View>
 
-    </SafeAreaView>
+              <Text style={styles.facilityName}>{facility.name}</Text>
+              <Text style={styles.facilityCategory}>{facility.category}</Text>
+
+              <View style={styles.distanceRow}>
+                <AppIcon name="location-outline" size={14} color={colors.textMuted} />
+                <Text style={styles.distanceText}>{facility.distance} away</Text>
+              </View>
+            </SurfaceCard>
+          ))}
+        </View>
+
+        {/* TRAVEL TIPS */}
+        <SurfaceCard style={styles.tipsCard}>
+          <View style={styles.tipsHeader}>
+            <AppIcon name="shield-checkmark" size={20} color={colors.cream} />
+            <Text style={[typography.h4, { color: colors.cream, marginLeft: 8 }]}>
+              Safety Recommendations
+            </Text>
+          </View>
+          <Text style={styles.tipItem}>
+            • Share your live location with trusted emergency contacts when moving at night.
+          </Text>
+          <Text style={styles.tipItem}>
+            • TrustTrip verified safe zones have continuous CCTV and security presence.
+          </Text>
+          <Text style={styles.tipItem}>
+            • The Emergency SOS button broadcasts your telemetry coordinates instantly.
+          </Text>
+        </SurfaceCard>
+      </ScrollView>
+
+      {/* BOTTOM NAV */}
+      <CustomBottomNav activeTab="Home" navigation={navigation} />
+    </CosmicBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: "#F9A8D4",
+  scrollContent: {
+    paddingHorizontal: spacing.screenPadding,
+    paddingTop: 12,
+    paddingBottom: 32,
   },
-
-  /* HERO */
-  heroHeader: {
-    backgroundColor: "#EC4899",
-    paddingHorizontal: 22,
-    paddingTop: 16,
-    paddingBottom: 40,
+  helplineCard: {
+    marginBottom: 20,
+    padding: 16,
+    borderColor: colors.primaryBorder,
   },
-  heroTitle: {
-    fontSize: 30,
-    fontWeight: "900",
-    color: "#FFFFFF",
-    marginBottom: 10,
+  helplineHeader: {
+    flexDirection: "row",
+    alignItems: "center",
   },
-  heroSubtitle: {
-    fontSize: 14,
-    color: "rgba(255,255,255,0.85)",
-    lineHeight: 22,
-  },
-
-  /* WHITE SHEET */
-  sheet: {
-    flex: 1,
-    backgroundColor: "#FFFFFF",
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    marginTop: -20,
-    paddingTop: 10,
-    paddingHorizontal: 16,
-  },
-  pullHandle: {
+  helplineIconCircle: {
     width: 40,
-    height: 4,
-    backgroundColor: "#E5E7EB",
-    borderRadius: 2,
-    alignSelf: "center",
-    marginBottom: 16,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: colors.primaryGlow,
+    alignItems: "center",
+    justifyContent: "center",
   },
-
-  /* SECTION HEADER */
+  helplineSub: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+  helplineBtnsRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 14,
+  },
+  helplineBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.primary,
+    borderRadius: radius.button,
+    paddingVertical: 10,
+    gap: 6,
+  },
+  helplineBtnText: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: colors.background,
+  },
   sectionHeader: {
     flexDirection: "row",
-    alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: "800",
-    color: "#111827",
-  },
-  nearbyBadge: {
-    backgroundColor: "#D1FAE5",
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 20,
-  },
-  nearbyText: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#059669",
-  },
-
-  /* GRID */
-  row: {
-    justifyContent: "space-between",
-  },
-  listContent: {
-    paddingBottom: 100,
-  },
-
-  /* CARD */
-  card: {
-    backgroundColor: "#FFFFFF",
-    width: "48%",
-    borderRadius: 18,
-    alignItems: "flex-start",
-    paddingVertical: 18,
-    paddingHorizontal: 14,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: "#F3F4F6",
-    shadowColor: "#000",
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 4,
-  },
-  iconCircle: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: "#FDF2F8",
-    justifyContent: "center",
     alignItems: "center",
     marginBottom: 12,
   },
-  image: {
-    width: 30,
-    height: 30,
-    resizeMode: "contain",
-    tintColor: "#DB2777",
-  },
-  cardName: {
-    fontSize: 14,
+  countBadge: {
+    ...typography.caption,
+    color: colors.primary,
     fontWeight: "700",
-    color: "#111827",
-    marginBottom: 8,
-    lineHeight: 20,
   },
-  statusRow: {
+  facilitiesGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    marginBottom: 20,
+  },
+  facilityCard: {
+    width: (width - spacing.screenPadding * 2 - 10) / 2,
+    padding: 14,
+  },
+  facilityTopRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  facilityIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: `${colors.primary}18`,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  facilityName: {
+    ...typography.h4,
+    fontSize: 13,
+    color: colors.white,
+    minHeight: 36,
+  },
+  facilityCategory: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontSize: 10,
+    marginTop: 2,
+  },
+  distanceRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
+    gap: 4,
+    marginTop: 10,
   },
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  statusText: {
+  distanceText: {
+    ...typography.caption,
     fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 0.3,
+    color: colors.textSecondary,
   },
-
-  /* SAFE ROUTE CARD */
-  safeRouteCard: {
-    backgroundColor: "#EFF6FF",
-    borderRadius: 20,
-    padding: 18,
-    marginTop: 4,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: "#DBEAFE",
+  tipsCard: {
+    padding: 16,
+    borderColor: "rgba(251, 226, 180, 0.2)",
   },
-  safeRouteTitle: {
-    fontSize: 18,
-    fontWeight: "800",
-    color: "#1E40AF",
-    marginBottom: 8,
+  tipsHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 10,
   },
-  safeRouteDesc: {
-    fontSize: 13,
-    color: "#374151",
+  tipItem: {
+    ...typography.caption,
+    color: colors.textSecondary,
     lineHeight: 20,
-    marginBottom: 12,
+    marginTop: 4,
   },
-  mapPlaceholder: {
-    height: 90,
-    backgroundColor: "#BFDBFE",
-    borderRadius: 12,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  mapText: { fontSize: 36 },
-
-  /* SOS FAB */
-  fabSOS: {
-    position: "absolute",
-    right: 20,
-    bottom: 84,
-    width: 58,
-    height: 58,
-    borderRadius: 29,
-    backgroundColor: "#DC2626",
-    justifyContent: "center",
-    alignItems: "center",
-    shadowColor: "#DC2626",
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.45,
-    shadowRadius: 10,
-    elevation: 12,
-  },
-  fabSOSText: {
-    color: "#FFFFFF",
-    fontWeight: "900",
-    fontSize: 13,
-    letterSpacing: 0.5,
-  },
-
-  
 });

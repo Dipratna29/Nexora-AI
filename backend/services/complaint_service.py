@@ -1,22 +1,23 @@
-from database import get_db_connection
+# complaint_service.py
+
+import logging
+from database import get_supabase
+
+logger = logging.getLogger(__name__)
 
 
 def get_user_id_by_username(username):
     """Get user_id from username."""
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        
-        cursor.execute("SELECT user_id FROM users WHERE username = %s", (username,))
-        result = cursor.fetchone()
-        
-        cursor.close()
-        conn.close()
-        
-        return result["user_id"] if result else None
-    except Exception as e:
-        print(f"Error getting user_id: {e}")
+        supabase = get_supabase()
+        res = supabase.table("users").select("user_id").eq("username", username).limit(1).execute()
+        if res.data:
+            return res.data[0]["user_id"]
         return None
+    except Exception as e:
+        logger.error("Error getting user_id: %s", e)
+        return None
+
 
 def create_complaint(data):
     """
@@ -28,51 +29,32 @@ def create_complaint(data):
     Returns:
         int: The complaint ID
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    supabase = get_supabase()
 
-    query = """
-        INSERT INTO complaints
-        (username, category, description, latitude, longitude)
-        VALUES (%s, %s, %s, %s, %s)
-    """
+    payload = {
+        "username": data.get("username"),
+        "category": data.get("category"),
+        "description": data.get("description"),
+        "latitude": data.get("latitude"),
+        "longitude": data.get("longitude"),
+        "status": "Pending"
+    }
 
-    cursor.execute(query, (
-        data.get("username"),
-        data.get("category"),
-        data.get("description"),
-        data.get("latitude"),
-        data.get("longitude")
-    ))
+    res = supabase.table("complaints").insert(payload).execute()
+    if not res.data:
+        raise RuntimeError("Failed to insert complaint")
 
-    complaint_id = cursor.lastrowid
-    conn.commit()
-
-    cursor.close()
-    conn.close()
-    
-    return complaint_id
+    return res.data[0]["id"]
 
 
 def get_complaints(username):
-
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-
-    query = """
-        SELECT id, category, description,
-               latitude, longitude,
-               status, created_at
-        FROM complaints
-        WHERE username = %s
-        ORDER BY created_at DESC
-    """
-
-    cursor.execute(query, (username,))
-
-    complaints = cursor.fetchall()
-
-    cursor.close()
-    conn.close()
-
-    return complaints
+    """Fetch all complaints submitted by a given username ordered by created_at DESC."""
+    supabase = get_supabase()
+    res = (
+        supabase.table("complaints")
+        .select("id, username, category, description, latitude, longitude, status, admin_response, priority, created_at")
+        .eq("username", username)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return res.data or []

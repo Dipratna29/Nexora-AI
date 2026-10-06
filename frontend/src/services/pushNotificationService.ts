@@ -53,19 +53,23 @@ export const getExpoPushToken = async (): Promise<string | null> => {
     const status = permObj.status || permObj.ios?.status || "undetermined";
     
     if (status !== "granted") {
-      console.log("Notification permission not granted, requesting...");
       const granted = await requestNotificationPermission();
       if (!granted) {
-        console.log("Notification permission denied by user");
         return null;
       }
     }
 
-    // Get the push token
-    const token = await Notifications.getExpoPushTokenAsync();
-    return token.data || null;
-  } catch (error) {
-    console.error("Error getting Expo push token:", error);
+    // Safely attempt token retrieval without triggering LogBox modal
+    try {
+      const token = await Notifications.getExpoPushTokenAsync();
+      return token.data || null;
+    } catch (tokenErr: any) {
+      // Internal diagnostic log - safe and non-blocking
+      console.log("[PushNotificationService] Push token unavailable in current dev build:", tokenErr?.message || "Unavailable");
+      return null;
+    }
+  } catch (error: any) {
+    console.log("[PushNotificationService] Notification permission exception:", error?.message || error);
     return null;
   }
 };

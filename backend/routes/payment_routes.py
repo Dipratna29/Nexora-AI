@@ -1,9 +1,17 @@
 import logging
-
 from flask import Blueprint, jsonify, request
 
 from config import Config
-from services.payment_service import PaymentError, create_payment_order, mark_payment_failed, process_webhook, verify_payment, verify_webhook_signature
+from services.payment_service import (
+    PaymentError,
+    create_payment_order,
+    verify_payment,
+    mark_payment_failed,
+    verify_webhook_signature,
+    process_webhook,
+    get_payment_status,
+    get_user_payments,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -16,50 +24,107 @@ def _json():
 
 @payment_bp.errorhandler(PaymentError)
 def handle_payment_error(error):
-    logger.warning("payment request rejected: %s", error.status)
-    return jsonify({"error": str(error)}), error.status
+    logger.warning("Payment error [%d]: %s", error.status, str(error))
+    return jsonify({"success": False, "error": str(error), "message": str(error)}), error.status
 
 
 def _require_https():
     if Config.REQUIRE_HTTPS_PAYMENTS and not request.is_secure and not Config.TRUST_PROXY:
-        return jsonify({"error": "Secure connection required"}), 400
+        return jsonify({"success": False, "error": "Secure connection required"}), 400
     return None
 
 
+# 1. CREATE PAYMENT ORDER (supports both /payments/razorpay/order and /api/payments/create-order)
 @payment_bp.route("/payments/razorpay/order", methods=["POST"])
+@payment_bp.route("/api/payments/create-order", methods=["POST"])
 def create_order():
     secure_error = _require_https()
     if secure_error:
         return secure_error
     try:
-        return jsonify(create_payment_order(_json())), 201
+        data = _json()
+        result = create_payment_order(data)
+        return jsonify(result), 201
     except PaymentError as error:
         return handle_payment_error(error)
+    except Exception as exc:
+        logger.error("Unexpected error in create_order: %s", exc)
+        return jsonify({"success": False, "error": "Internal server error creating payment order"}), 500
 
 
+# 2. VERIFY PAYMENT (supports both /payments/razorpay/verify and /api/payments/verify)
 @payment_bp.route("/payments/razorpay/verify", methods=["POST"])
+@payment_bp.route("/api/payments/verify", methods=["POST"])
 def verify_order():
     secure_error = _require_https()
     if secure_error:
         return secure_error
     try:
-        return jsonify(verify_payment(_json()))
+        data = _json()
+        result = verify_payment(data)
+        return jsonify(result), 200
     except PaymentError as error:
         return handle_payment_error(error)
+    except Exception as exc:
+        logger.error("Unexpected error in verify_order: %s", exc)
+        return jsonify({"success": False, "error": "Internal server error verifying payment"}), 500
 
 
-@payment_bp.route("/payments/razorpay/webhook", methods=["POST"])
-def webhook():
-    try:
-        verify_webhook_signature(request.get_data(), request.headers.get("X-Razorpay-Signature", ""))
-        return jsonify(process_webhook(request.get_json(silent=True) or {}))
-    except PaymentError as error:
-        return handle_payment_error(error)
-
-
+# 3. PAYMENT FAILURE REPORTING
 @payment_bp.route("/payments/razorpay/failure", methods=["POST"])
+@payment_bp.route("/api/payments/failure", methods=["POST"])
 def failure():
     try:
-        return jsonify(mark_payment_failed(_json()))
+        data = _json()
+        result = mark_payment_failed(data)
+        return jsonify(result), 200
     except PaymentError as error:
         return handle_payment_error(error)
+    except Exception as exc:
+        logger.error("Unexpected error in failure callback: %s", exc)
+        return jsonify({"success": False, "error": "Internal server error recording failure"}), 500
+
+
+# 4. WEBHOOK HANDLER
+@payment_bp.route("/payments/razorpay/webhook", methods=["POST"])
+@payment_bp.route("/api/payments/razorpay/webhook", methods=["POST"])
+def webhook():
+    raw_body = request.get_data()
+    signature = request.headers.get("X-Razorpay-Signature", "")
+    try:
+        verify_webhook_signature(raw_body, signature)
+        payload = request.get_json(silent=True) or {}
+        result = process_webhook(payload)
+        return jsonify(result), 200
+    except PaymentError as error:
+        return handle_payment_error(error)
+    except Exception as exc:
+        logger.error("Unexpected error processing webhook: %s", exc)
+        return jsonify({"success": False, "error": "Webhook processing error"}), 500
+
+
+# 5. STATUS INQUIRY (for network interruption or pending states)
+@payment_bp.route("/payments/status/<order_id>", methods=["GET"])
+@payment_bp.route("/api/payments/status/<order_id>", methods=["GET"])
+def check_status(order_id):
+    user_id = request.args.get("user_id", type=int)
+    try:
+        result = get_payment_status(order_id, user_id=user_id)
+        return jsonify(result), 200
+    except PaymentError as error:
+        return handle_payment_error(error)
+    except Exception as exc:
+        logger.error("Error retrieving payment status: %s", exc)
+        return jsonify({"success": False, "error": "Failed to fetch payment status"}), 500
+
+
+# 6. USER PAYMENT HISTORY
+@payment_bp.route("/payments/my-orders/<int:user_id>", methods=["GET"])
+@payment_bp.route("/api/payments/my-orders/<int:user_id>", methods=["GET"])
+def user_payments(user_id):
+    try:
+        payments = get_user_payments(user_id)
+        return jsonify({"success": True, "payments": payments}), 200
+    except Exception as exc:
+        logger.error("Error retrieving user payments for user #%s: %s", user_id, exc)
+        return jsonify({"success": False, "payments": [], "error": "Failed to load payment history"}), 500

@@ -1,17 +1,16 @@
 import os
 from dotenv import load_dotenv
 
-# Load environment variables from a .env file if it exists
-load_dotenv()
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ENV_PATH = os.path.join(BASE_DIR, ".env")
+load_dotenv(dotenv_path=ENV_PATH, override=True)
 
 class Config:
     ENVIRONMENT = os.environ.get("ENVIRONMENT", "development").lower()
     SECRET_KEY = os.environ.get("SECRET_KEY", "")
 
-    DB_HOST = os.environ.get("DB_HOST", "")
-    DB_USER = os.environ.get("DB_USER", "")
-    DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
-    DB_DATABASE = os.environ.get("DB_DATABASE", "")
+    SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+    SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
     PORT = int(os.environ.get("PORT", "5000"))
     DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
@@ -25,16 +24,23 @@ class Config:
     RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
     RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
 
+    GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+    GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
+
     @classmethod
     def validate(cls):
-        required = {"SECRET_KEY": cls.SECRET_KEY, "DB_HOST": cls.DB_HOST, "DB_USER": cls.DB_USER,
-                    "DB_PASSWORD": cls.DB_PASSWORD, "DB_DATABASE": cls.DB_DATABASE,
-                    "RAZORPAY_KEY_ID": cls.RAZORPAY_KEY_ID, "RAZORPAY_KEY_SECRET": cls.RAZORPAY_KEY_SECRET}
+        required = {
+            "SECRET_KEY": cls.SECRET_KEY,
+            "SUPABASE_URL": cls.SUPABASE_URL,
+            "SUPABASE_SERVICE_ROLE_KEY": cls.SUPABASE_SERVICE_ROLE_KEY,
+            "RAZORPAY_KEY_ID": cls.RAZORPAY_KEY_ID,
+            "RAZORPAY_KEY_SECRET": cls.RAZORPAY_KEY_SECRET
+        }
         missing = [name for name, value in required.items() if not value]
         if cls.RAZORPAY_MODE not in {"test", "live"}:
             raise RuntimeError("RAZORPAY_MODE must be 'test' or 'live'")
         if cls.ENVIRONMENT in {"production", "staging"} and missing:
-            raise RuntimeError("Missing required production configuration")
+            raise RuntimeError(f"Missing required production configuration: {', '.join(missing)}")
         if cls.ENVIRONMENT == "production" and cls.RAZORPAY_MODE != "live":
             raise RuntimeError("Production requires explicit live Razorpay mode")
         return missing

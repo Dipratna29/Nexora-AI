@@ -62,3 +62,23 @@ export interface AuthenticatedUser {
   id: number | string;
   username: string;
 }
+
+/** Location source identification */
+export type LocationSource = 'GPS' | 'MANUAL' | 'NONE';
+
+/** Normalized location type */
+export type LocationType = 'gps' | 'manual' | 'none';
+
+/** Comprehensive GPS status mode for UI indicators */
+export type GpsStatusMode = 'ACTIVE' | 'SEARCHING' | 'OFF' | 'PERMISSION_DENIED' | 'ERROR' | 'MANUAL';
+
+/** Active unified location used across all features in TrustTrip */
+export interface ActiveLocation {
+  latitude: number;
+  longitude: number;
+  name: string;
+  address?: string;
+  source: LocationSource;
+  accuracy?: number | null;
+  timestamp?: number;
+}

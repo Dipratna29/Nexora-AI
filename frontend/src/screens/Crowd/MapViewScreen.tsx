@@ -1,455 +1,335 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from "react";
 import {
   View,
   Text,
   StyleSheet,
-  SafeAreaView,
-  StatusBar,
   TouchableOpacity,
   Dimensions,
-  Alert,
-} from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
-
-import api from '../../config/api';
-import useLocationTracking from '../../hooks/useLocationTracking';
-import type { CrowdLocationApiResponse, CrowdMapPin } from './types';
-
-const { width, height } = Dimensions.get('window');
+} from "react-native";
+import { useNavigation } from "@react-navigation/native";
+import api from "../../config/api";
+import CosmicBackground from "../../components/common/CosmicBackground";
+import ScreenHeader from "../../components/common/ScreenHeader";
+import SurfaceCard from "../../components/common/SurfaceCard";
+import AppIcon from "../../components/common/AppIcon";
+import ActiveLocationBar from "../../components/common/ActiveLocationBar";
+import { useLocationContext } from "../../context/LocationContext";
+import { StatusBadge } from "../../components/common/StatusIndicator";
+import { colors, typography, radius, spacing } from "../../theme";
+import type { CrowdLocationApiResponse, CrowdMapPin } from "./types";
 
 export default function MapViewScreen() {
   const [selected, setSelected] = useState<number | null>(null);
   const [pins, setPins] = useState<CrowdMapPin[]>([]);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [autoSend, setAutoSend] = useState(false);
-  const [intervalSeconds, setIntervalSeconds] = useState<number>(60); // 60 seconds
+  const [intervalSeconds, setIntervalSeconds] = useState<number>(60);
+  const navigation = useNavigation<any>();
+  const { activeLocation, isManual } = useLocationContext();
 
-  const {
-    state: locationState,
-    requestPermission,
-    getCurrentLocation,
-    startAutoSend,
-    stopAutoSend,
-  } = useLocationTracking({
-    onLocationUpdate: (coords) => {
-      console.log('Location updated on map:', coords);
-      // Refresh locations data when user location is updated
-      fetchLocations();
-    },
-    onError: (error) => {
-      console.error('Map location error:', error);
-      setErrorMsg(error);
-    },
-    updateIntervalMs: intervalSeconds * 1000,
-  });
-
-  const mapW = Dimensions.get('window').width;
-  const mapH = Dimensions.get('window').height * 0.78;
+  const mapW = Dimensions.get("window").width;
+  const mapH = Dimensions.get("window").height * 0.65;
 
   useEffect(() => {
     fetchLocations();
-  }, []);
-
-  // Start/stop auto-send when screen is focused
-  useFocusEffect(
-    useCallback(() => {
-      if (autoSend) {
-        startAutoSend(intervalSeconds * 1000);
-      }
-      return () => {
-        stopAutoSend();
-      };
-    }, [autoSend, intervalSeconds, startAutoSend, stopAutoSend])
-  );
+    const timer = setInterval(fetchLocations, intervalSeconds * 1000);
+    return () => clearInterval(timer);
+  }, [activeLocation, intervalSeconds]);
 
   const fetchLocations = async () => {
     try {
-      const res = await api.get<CrowdLocationApiResponse[]>('/crowd/locations');
+      const res = await api.get<CrowdLocationApiResponse[]>("/crowd/locations");
       if (Array.isArray(res.data)) {
-        const locs = res.data;
-        const lats = locs.map((l) => l.latitude);
-        const lons = locs.map((l) => l.longitude);
-        const minLat = Math.min(...lats);
-        const maxLat = Math.max(...lats);
-        const minLon = Math.min(...lons);
-        const maxLon = Math.max(...lons);
+        const mappedPins: CrowdMapPin[] = res.data.map((loc, index) => {
+          const lat = loc.latitude ?? (activeLocation ? activeLocation.latitude : 0);
+          const lng = loc.longitude ?? (activeLocation ? activeLocation.longitude : 0);
+          const normX = Math.abs((lng * 100) % 1);
+          const normY = Math.abs((lat * 100) % 1);
+          const clampX = Math.min(Math.max(normX, 0.15), 0.85);
+          const clampY = Math.min(Math.max(normY, 0.2), 0.8);
 
-        const mapped: CrowdMapPin[] = locs.map((l, i) => {
-          const x = (l.longitude - minLon) / (maxLon - minLon || 1);
-          const y = 1 - (l.latitude - minLat) / (maxLat - minLat || 1);
           return {
-            id: l.location_id,
-            x,
-            y,
+            id: index + 1,
+            label: loc.location_name,
+            x: clampX,
+            y: clampY,
             color:
-              l.occupancy_percentage >= 80
-                ? '#F59E0B'
-                : l.occupancy_percentage >= 40
-                  ? '#3B82F6'
-                  : '#9CA3AF',
-            icon: '👥',
-            label: l.location_name,
-            raw: l,
-            isMain: i === 0,
+              loc.crowd_status === "OVERCROWDED"
+                ? colors.danger
+                : loc.crowd_status === "MODERATE"
+                ? colors.cream
+                : colors.primary,
+            size: loc.crowd_status === "OVERCROWDED" ? 22 : 18,
+            icon: "location",
+            isMain: index === 0,
+            raw: loc,
           };
         });
-
-        setPins(mapped);
-        setErrorMsg(null);
+        setPins(mappedPins);
       }
-    } catch (e) {
-      console.log('Failed to fetch locations', e);
-      setErrorMsg('Failed to load locations');
+    } catch {
+      // Fallback
     }
   };
 
-  const handleSendLocation = async () => {
-    // Check permission and get location
-    if (locationState.permissionState !== 'granted') {
-      const granted = await requestPermission();
-      if (!granted) {
-        setErrorMsg('Location permission required');
-        return;
-      }
-    }
-
-    const coords = await getCurrentLocation();
-    if (!coords) {
-      setErrorMsg('Unable to get location');
-      return;
-    }
-
-    // Refresh locations after sending
-    fetchLocations();
-  };
-
-  const mainPin = selected !== null ? pins.find((p: CrowdMapPin) => p.id === selected) : pins.length > 0 ? pins[0] : null;
+  const selectedPin = pins.find((p) => p.id === selected) || pins[0];
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <StatusBar barStyle="dark-content" backgroundColor="#F5F6FA" />
+    <CosmicBackground>
+      <ScreenHeader
+        title="Interactive Safety Map"
+        subtitle="Live precinct density radar"
+        showBack
+        onBack={() => navigation.goBack()}
+        rightAction={
+          <TouchableOpacity onPress={fetchLocations} style={{ padding: 8 }}>
+            <AppIcon name="refresh" size={18} color={colors.primary} />
+          </TouchableOpacity>
+        }
+      />
 
-      {/* Top Nav */}
-      <View style={styles.topNav}>
-        <TouchableOpacity style={styles.navBtn}>
-          <Text style={styles.navArrow}>←</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navBtn} onPress={handleSendLocation}>
-          <Text style={styles.navIcon}>📍</Text>
-        </TouchableOpacity>
-      </View>
+      {/* ACTIVE LOCATION INDICATOR */}
+      <ActiveLocationBar compact style={{ marginHorizontal: spacing.screenPadding, marginVertical: 6 }} />
 
-      {/* Map Area */}
-      <View style={[styles.mapContainer, { height: mapH }]}>
-        {/* Simulated map background */}
-        <View style={styles.mapBg}>
-          {/* Water area */}
-          <View style={styles.waterLeft} />
-          <View style={styles.waterRight} />
+      {/* RADAR MAP CONTAINER */}
+      <View style={[styles.mapContainer, { width: mapW, height: mapH }]}>
+        <View style={styles.radarGrid}>
+          {/* Concentric radar rings */}
+          <View style={[styles.radarRing, { width: mapW * 0.85, height: mapW * 0.85, borderRadius: (mapW * 0.85) / 2 }]} />
+          <View style={[styles.radarRing, { width: mapW * 0.55, height: mapW * 0.55, borderRadius: (mapW * 0.55) / 2 }]} />
+          <View style={[styles.radarRing, { width: mapW * 0.25, height: mapW * 0.25, borderRadius: (mapW * 0.25) / 2 }]} />
 
-          {/* Land mass - peninsula shape */}
-          <View style={styles.land} />
+          {/* Crosshairs */}
+          <View style={styles.crosshairH} />
+          <View style={styles.crosshairV} />
 
-          {/* Roads simulation */}
-          <View style={[styles.road, { top: '30%', left: '20%', width: '60%', height: 2 }]} />
-          <View style={[styles.road, { top: '45%', left: '30%', width: '40%', height: 2 }]} />
-          <View style={[styles.road, { top: '55%', left: '25%', width: '50%', height: 2 }]} />
-          <View style={[styles.road, { top: '30%', left: '45%', width: 2, height: '40%' }]} />
-          <View style={[styles.road, { top: '25%', left: '35%', width: 2, height: '35%' }]} />
-
-          {/* Highlight ring around main location (if any) */}
-          {pins[0] && (
-            <View
-              style={[
-                styles.ringOuter,
-                {
-                  left: pins[0].x * mapW - 90,
-                  top: pins[0].y * mapH - 90,
-                  width: 180,
-                  height: 180,
-                  borderRadius: 90,
-                },
-              ]}
-            />
-          )}
-
-          {/* Pins */}
-          {pins.map((pin: CrowdMapPin) => (
-            <TouchableOpacity
-              key={pin.id}
-              style={[
-                styles.pin,
-                {
-                  left: pin.x * mapW - (pin.isMain ? 24 : 18),
-                  top: pin.y * mapH - (pin.isMain ? 24 : 18),
-                  width: pin.isMain ? 48 : 36,
-                  height: pin.isMain ? 48 : 36,
-                  borderRadius: pin.isMain ? 24 : 18,
-                  backgroundColor: pin.color,
-                  borderWidth: pin.isMain ? 3 : 0,
-                  borderColor: '#FFFFFF',
-                },
-              ]}
-              onPress={() => setSelected(pin.id)}
-            >
-              <Text style={[styles.pinIcon, { fontSize: pin.isMain ? 22 : 16 }]}>
-                {pin.icon}
-              </Text>
-            </TouchableOpacity>
-          ))}
-
-          {/* Popup callout for main or selected pin */}
-          {mainPin && (
-            <View
-              style={[
-                styles.callout,
-                {
-                  left: mainPin.x * mapW - 110,
-                  top: mainPin.y * mapH - 120,
-                },
-              ]}
-            >
-              <View style={styles.calloutHeader}>
-                <Text style={styles.calloutTitle}>{mainPin.label}</Text>
-                <View style={styles.calloutBadge}>
-                  <Text style={styles.calloutBadgeText}>⚠ {mainPin.raw?.crowd_status ?? 'LOW'}</Text>
+          {/* PINS */}
+          {pins.map((pin) => {
+            const isSel = pin.id === selected;
+            return (
+              <TouchableOpacity
+                key={pin.id}
+                style={[
+                  styles.pinWrap,
+                  {
+                    left: pin.x * (mapW - 60) + 10,
+                    top: pin.y * (mapH - 60) + 10,
+                  },
+                ]}
+                onPress={() => setSelected(pin.id)}
+                activeOpacity={0.8}
+              >
+                <View
+                  style={[
+                    styles.pinOuter,
+                    {
+                      borderColor: pin.color,
+                      backgroundColor: isSel ? pin.color : "rgba(19, 19, 33, 0.85)",
+                    },
+                  ]}
+                >
+                  <AppIcon
+                    name="location"
+                    size={14}
+                    color={isSel ? colors.background : pin.color}
+                  />
                 </View>
-              </View>
-              <Text style={styles.calloutCount}>
-                <Text style={styles.calloutBig}>{mainPin.raw?.crowd_count ?? 0}</Text>
-                <Text style={styles.calloutSub}> people</Text>
-              </Text>
-            </View>
-          )}
+                <Text style={styles.pinLabel} numberOfLines={1}>
+                  {pin.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
 
-        {/* Legend */}
+        {/* FLOATING LEGEND */}
         <View style={styles.legend}>
-          <Text style={styles.legendTitle}>DENSITY</Text>
-          {[
-            { color: '#F59E0B', label: 'High (>300)' },
-            { color: '#3B82F6', label: 'Med (100-300)' },
-            { color: '#9CA3AF', label: 'Low (<100)' },
-          ].map((item, i) => (
-            <View key={i} style={styles.legendRow}>
-              <View style={[styles.legendDot, { backgroundColor: item.color }]} />
-              <Text style={styles.legendText}>{item.label}</Text>
-            </View>
-          ))}
+          <View style={styles.legendItem}>
+            <View style={[styles.legendDot, { backgroundColor: colors.primary }]} />
+            <Text style={styles.legendText}>Low</Text>
+          </View>
+          <View style={styles.legendItem}>
+            <View style={[styles.legendDot, { backgroundColor: colors.cream }]} />
+            <Text style={styles.legendText}>Moderate</Text>
+          </View>
+          <View style={styles.legendItem}>
+            <View style={[styles.legendDot, { backgroundColor: colors.danger }]} />
+            <Text style={styles.legendText}>High</Text>
+          </View>
         </View>
       </View>
-      {/* Bottom controls */}
-      <View style={styles.controls}>
-        <TouchableOpacity
-          style={[styles.controlBtn, autoSend && styles.controlBtnActive]}
-          onPress={() => setAutoSend(!autoSend)}
+
+      {/* SELECTED PIN DETAILS BOTTOM SHEET */}
+      {selectedPin && (
+        <SurfaceCard
+          style={styles.bottomCard}
+          variant="elevated"
+          onPress={() => {
+            if (selectedPin.raw) {
+              navigation.navigate("CrowdLocationDetail", { location: selectedPin.raw });
+            }
+          }}
         >
-          <Text style={styles.controlBtnText}>{autoSend ? 'Auto-Send: ON' : 'Auto-Send: OFF'}</Text>
-        </TouchableOpacity>
-        <View style={styles.intervalRow}>
-          {[30, 60, 120, 300].map((s) => (
-            <TouchableOpacity
-              key={s}
-              style={[styles.intervalBtn, intervalSeconds === s && styles.intervalBtnActive]}
-              onPress={() => setIntervalSeconds(s)}
-            >
-              <Text style={[styles.intervalText, intervalSeconds === s && styles.intervalTextActive]}>
-                {s < 60 ? s + 's' : Math.round(s / 60) + 'm'}
+          <View style={styles.cardRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={typography.h4}>{selectedPin.label}</Text>
+              <Text style={styles.cardSub}>
+                Occupancy: {selectedPin.raw?.crowd_count ?? 0} / {selectedPin.raw?.capacity ?? 0} ({selectedPin.raw?.occupancy_percentage ?? 0}%)
               </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+            </View>
+            <StatusBadge
+              label={selectedPin.raw?.crowd_status ?? "NORMAL"}
+              status={
+                selectedPin.raw?.crowd_status === "OVERCROWDED"
+                  ? "danger"
+                  : selectedPin.raw?.crowd_status === "MODERATE"
+                  ? "moderate"
+                  : "ready"
+              }
+            />
+          </View>
+        </SurfaceCard>
+      )}
+
+      {/* TELEMETRY INTERVAL CHIPS */}
+      <View style={styles.intervalRow}>
+        <Text style={styles.intervalTitle}>Radar Telemetry:</Text>
+        {[30, 60, 120].map((s) => (
+          <TouchableOpacity
+            key={s}
+            style={[styles.intervalChip, intervalSeconds === s && styles.intervalChipActive]}
+            onPress={() => setIntervalSeconds(s)}
+          >
+            <Text style={[styles.intervalChipText, intervalSeconds === s && styles.intervalChipTextActive]}>
+              {s}s
+            </Text>
+          </TouchableOpacity>
+        ))}
       </View>
-    </SafeAreaView>
+    </CosmicBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: '#F5F6FA',
-  },
-  topNav: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    backgroundColor: '#FFFFFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#F3F4F6',
-  },
-  navBtn: {
-    padding: 4,
-  },
-  navArrow: {
-    fontSize: 22,
-    color: '#111827',
-    fontWeight: '600',
-  },
-  navIcon: {
-    fontSize: 20,
-    color: '#6B7280',
-  },
-
   mapContainer: {
-    position: 'relative',
-    overflow: 'hidden',
+    position: "relative",
+    backgroundColor: colors.surface,
+    overflow: "hidden",
   },
-  mapBg: {
-    flex: 1,
-    backgroundColor: '#C8DFF0',
+  radarGrid: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  waterLeft: {
-    position: 'absolute',
+  radarRing: {
+    position: "absolute",
+    borderWidth: 1,
+    borderColor: "rgba(70, 240, 210, 0.12)",
+  },
+  crosshairH: {
+    position: "absolute",
     left: 0,
-    top: 0,
-    width: '18%',
-    height: '100%',
-    backgroundColor: '#B0CEE8',
-  },
-  waterRight: {
-    position: 'absolute',
     right: 0,
-    top: '40%',
-    width: '20%',
-    height: '60%',
-    backgroundColor: '#B0CEE8',
+    height: 1,
+    backgroundColor: "rgba(70, 240, 210, 0.08)",
   },
-  land: {
-    position: 'absolute',
-    left: '15%',
-    top: '10%',
-    width: '70%',
-    height: '85%',
-    backgroundColor: '#E8ECD8',
-    borderRadius: 30,
+  crosshairV: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    width: 1,
+    backgroundColor: "rgba(70, 240, 210, 0.08)",
   },
-  road: {
-    position: 'absolute',
-    backgroundColor: '#D1D5DB',
+  pinWrap: {
+    position: "absolute",
+    alignItems: "center",
+    maxWidth: 90,
   },
-  ringOuter: {
-    position: 'absolute',
-    backgroundColor: 'rgba(245,158,11,0.12)',
+  pinOuter: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     borderWidth: 1.5,
-    borderColor: 'rgba(245,158,11,0.5)',
+    alignItems: "center",
+    justifyContent: "center",
   },
-  pin: {
-    position: 'absolute',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 4,
-  },
-  pinIcon: {
-    textAlign: 'center',
-  },
-  callout: {
-    position: 'absolute',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 12,
-    width: 170,
-    shadowColor: '#000',
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-    elevation: 5,
-  },
-  calloutHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 4,
-  },
-  calloutTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#111827',
-  },
-  calloutBadge: {
-    backgroundColor: '#FEF3C7',
-    borderRadius: 6,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-  },
-  calloutBadgeText: {
+  pinLabel: {
     fontSize: 10,
-    fontWeight: '700',
-    color: '#B45309',
+    fontWeight: "700",
+    color: colors.white,
+    marginTop: 3,
+    textAlign: "center",
   },
-  calloutCount: {
-    marginTop: 4,
-  },
-  calloutBig: {
-    fontSize: 28,
-    fontWeight: '900',
-    color: '#1E2A5E',
-  },
-  calloutSub: {
-    fontSize: 14,
-    color: '#9CA3AF',
-  },
-
   legend: {
-    position: 'absolute',
-    bottom: 20,
-    right: 16,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 12,
-    shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-    elevation: 4,
-    minWidth: 140,
+    position: "absolute",
+    top: 14,
+    right: 14,
+    backgroundColor: "rgba(19, 19, 33, 0.90)",
+    borderRadius: radius.pill,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    gap: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
-  legendTitle: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#374151',
-    marginBottom: 8,
-    letterSpacing: 0.5,
-  },
-  legendRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 5,
+  legendItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
   },
   legendDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    marginRight: 8,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
   legendText: {
-    fontSize: 13,
-    color: '#374151',
+    fontSize: 10,
+    color: colors.textSecondary,
+    fontWeight: "700",
   },
-  controls: {
-    padding: 12,
-    backgroundColor: '#FFFFFF',
-    flexDirection: 'column',
+  bottomCard: {
+    marginHorizontal: spacing.screenPadding,
+    marginTop: 12,
+    padding: 14,
   },
-  controlBtn: {
-    backgroundColor: '#EEF2FF',
-    padding: 10,
-    borderRadius: 10,
-    alignItems: 'center',
-    marginBottom: 8,
+  cardRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
   },
-  controlBtnActive: {
-    backgroundColor: '#1E40AF'
+  cardSub: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    marginTop: 2,
   },
-  controlBtnText: {
-    color: '#1E2A5E',
-    fontWeight: '700'
+  intervalRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: spacing.screenPadding,
+    paddingVertical: 10,
+    gap: 8,
   },
-  intervalRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  intervalBtn: { padding: 8, borderRadius: 8, backgroundColor: '#F3F4F6', minWidth: 48, alignItems: 'center' },
-  intervalBtnActive: { backgroundColor: '#1E40AF' },
-  intervalText: { color: '#374151', fontWeight: '700' },
-  intervalTextActive: { color: '#FFFFFF' },
+  intervalTitle: {
+    ...typography.caption,
+    color: colors.textMuted,
+  },
+  intervalChip: {
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  intervalChipActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  intervalChipText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.textSecondary,
+  },
+  intervalChipTextActive: {
+    color: colors.background,
+  },
 });

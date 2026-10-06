@@ -135,7 +135,7 @@ export const useLocationTracking = (options: UseLocationTrackingOptions = {}) =>
         setState((prev) => ({
           ...prev,
           status: 'error' as LocationTrackingStatus,
-          error: 'Unable to determine your current location. Try again.',
+          error: 'Location unavailable',
         }));
         return null;
       }

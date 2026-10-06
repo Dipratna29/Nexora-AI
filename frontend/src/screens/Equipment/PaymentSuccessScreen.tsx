@@ -1,49 +1,185 @@
 import React from "react";
-import { SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { StyleSheet, Text, TouchableOpacity, View, ScrollView } from "react-native";
+import CosmicBackground from "../../components/common/CosmicBackground";
+import SurfaceCard from "../../components/common/SurfaceCard";
+import ScreenHeader from "../../components/common/ScreenHeader";
+import AppIcon from "../../components/common/AppIcon";
+import { colors, typography, radius, spacing, shadows } from "../../theme";
 
 export default function PaymentSuccessScreen({ route, navigation }: any) {
   const { paymentId, orderId, amount, equipmentName } = route.params || {};
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <View style={styles.content}>
-        <View style={styles.checkCircle}><Text style={styles.check}>✓</Text></View>
-        <Text style={styles.title}>Payment successful</Text>
-        <Text style={styles.subtitle}>Your safety equipment order has been confirmed.</Text>
-        <View style={styles.card}>
-          <Row label="Equipment" value={equipmentName || "Safety equipment"} />
-          <Row label="Order ID" value={orderId || "—"} />
-          <Row label="Payment ID" value={paymentId || "—"} />
-          <Row label="Amount" value={`₹${Number(amount || 0) / 100}`} />
+    <CosmicBackground>
+      <ScreenHeader title="Payment Verified" />
+
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        {/* CHECKMARK HERO */}
+        <View style={styles.heroSection}>
+          <View style={styles.checkCircle}>
+            <AppIcon name="checkmark" size={42} color={colors.background} />
+          </View>
+          <Text style={styles.title}>Payment Authorized & Captured</Text>
+          <Text style={styles.subtitle}>
+            Your safety equipment reservation is confirmed. Razorpay transaction logged with authority dispatch.
+          </Text>
         </View>
-        <TouchableOpacity style={styles.primary} onPress={() => navigation.navigate("MyOrders")}>
-          <Text style={styles.primaryText}>View my orders</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.secondary} onPress={() => navigation.navigate("Home")}>
-          <Text style={styles.secondaryText}>Back to home</Text>
-        </TouchableOpacity>
-      </View>
-    </SafeAreaView>
+
+        {/* ORDER DETAILS RECEIPT CARD */}
+        <SurfaceCard style={styles.receiptCard} variant="elevated">
+          <View style={styles.cardHeaderRow}>
+            <AppIcon name="shield-checkmark" size={18} color={colors.primary} />
+            <Text style={styles.receiptTitle}>OFFICIAL TRANSACTION RECEIPT</Text>
+          </View>
+
+          <View style={styles.divider} />
+
+          <Row label="Equipment Item" value={equipmentName || "Personal Safety Alarm"} />
+          <Row label="Gateway Order ID" value={orderId || "—"} />
+          <Row label="Razorpay Payment ID" value={paymentId || "—"} />
+          <Row
+            label="Total Authorized"
+            value={`₹${(Number(amount || 0) / 100).toFixed(2)}`}
+            isTotal
+          />
+        </SurfaceCard>
+
+        {/* ACTIONS */}
+        <View style={styles.actionsCol}>
+          <TouchableOpacity
+            style={styles.primaryBtn}
+            onPress={() => navigation.navigate("MyOrders")}
+            activeOpacity={0.85}
+          >
+            <AppIcon name="cube" size={18} color={colors.background} />
+            <Text style={styles.primaryBtnText}>View My Orders</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.secondaryBtn}
+            onPress={() => navigation.navigate("Home")}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.secondaryBtnText}>Return to Command Center</Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+    </CosmicBackground>
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
-  return <View style={styles.row}><Text style={styles.label}>{label}</Text><Text style={styles.value} numberOfLines={1}>{value}</Text></View>;
+function Row({ label, value, isTotal }: { label: string; value: string; isTotal?: boolean }) {
+  return (
+    <View style={styles.row}>
+      <Text style={styles.rowLabel}>{label}</Text>
+      <Text style={[styles.rowValue, isTotal && styles.rowValueTotal]} numberOfLines={1}>
+        {value}
+      </Text>
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#F8FAFC" },
-  content: { flex: 1, padding: 24, justifyContent: "center" },
-  checkCircle: { alignSelf: "center", width: 82, height: 82, borderRadius: 41, backgroundColor: "#DCFCE7", alignItems: "center", justifyContent: "center", marginBottom: 22 },
-  check: { color: "#15803D", fontSize: 46, fontWeight: "800" },
-  title: { color: "#111827", fontSize: 28, fontWeight: "800", textAlign: "center" },
-  subtitle: { color: "#64748B", fontSize: 15, lineHeight: 22, textAlign: "center", marginTop: 10, marginBottom: 28 },
-  card: { backgroundColor: "#FFFFFF", borderRadius: 18, padding: 18, gap: 16, shadowColor: "#111827", shadowOpacity: 0.06, shadowRadius: 12, elevation: 3 },
-  row: { flexDirection: "row", justifyContent: "space-between", gap: 12 },
-  label: { color: "#64748B", fontSize: 14 },
-  value: { color: "#111827", fontSize: 14, fontWeight: "700", flexShrink: 1 },
-  primary: { backgroundColor: "#4050C8", borderRadius: 14, paddingVertical: 16, alignItems: "center", marginTop: 28 },
-  primaryText: { color: "#FFFFFF", fontWeight: "800", fontSize: 16 },
-  secondary: { alignItems: "center", paddingVertical: 16 },
-  secondaryText: { color: "#4050C8", fontWeight: "700", fontSize: 15 },
+  scrollContent: {
+    paddingHorizontal: spacing.screenPadding,
+    paddingTop: 20,
+    paddingBottom: 32,
+  },
+  heroSection: {
+    alignItems: "center",
+    marginBottom: 24,
+  },
+  checkCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 18,
+    ...shadows.glowPrimary,
+  },
+  title: {
+    ...typography.h2,
+    color: colors.white,
+    textAlign: "center",
+  },
+  subtitle: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    textAlign: "center",
+    marginTop: 8,
+    lineHeight: 18,
+    maxWidth: 300,
+  },
+  receiptCard: {
+    padding: 18,
+    marginBottom: 24,
+    borderColor: colors.primaryBorder,
+  },
+  cardHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  receiptTitle: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: colors.primary,
+    letterSpacing: 1,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: colors.border,
+    marginVertical: 14,
+  },
+  row: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  rowLabel: {
+    ...typography.caption,
+    color: colors.textMuted,
+  },
+  rowValue: {
+    ...typography.caption,
+    color: colors.textPrimary,
+    fontWeight: "700",
+    maxWidth: "60%",
+  },
+  rowValueTotal: {
+    ...typography.h3,
+    color: colors.primary,
+    fontSize: 18,
+  },
+  actionsCol: {
+    gap: 12,
+  },
+  primaryBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.primary,
+    borderRadius: radius.button,
+    paddingVertical: 15,
+    gap: 8,
+    ...shadows.glowPrimary,
+  },
+  primaryBtnText: {
+    fontFamily: typography.button.fontFamily,
+    fontSize: 15,
+    fontWeight: "800",
+    color: colors.background,
+  },
+  secondaryBtn: {
+    alignItems: "center",
+    paddingVertical: 12,
+  },
+  secondaryBtnText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: "700",
+  },
 });

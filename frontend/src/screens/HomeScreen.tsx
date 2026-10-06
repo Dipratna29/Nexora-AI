@@ -1,625 +1,879 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
-  Image,
   TouchableOpacity,
+  ScrollView,
   Dimensions,
-  Platform,
+  Image,
+  Animated,
 } from "react-native";
-import { LinearGradient } from "expo-linear-gradient";
-import { Ionicons } from "@expo/vector-icons";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useFocusEffect } from "@react-navigation/native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import api from "../config/api";
+import locationService from "../services/locationService";
+import CosmicBackground from "../components/common/CosmicBackground";
+import SurfaceCard from "../components/common/SurfaceCard";
+import FeatureCard from "../components/common/FeatureCard";
+import AppIcon from "../components/common/AppIcon";
+import { StatusBadge } from "../components/common/StatusIndicator";
+import CustomBottomNav from "../components/common/CustomBottomNav";
+import ActiveLocationBar from "../components/common/ActiveLocationBar";
+import { useLocationContext } from "../context/LocationContext";
+import { colors, typography, radius, shadows, spacing } from "../theme";
 
 const { width } = Dimensions.get("window");
 
-// ---------------------------------------------------------------------------
-// TrustTrip design tokens (from DESIGN.md)
-// ---------------------------------------------------------------------------
-const colors = {
-  surface: "#f8f9ff",
-  surfaceContainerLowest: "#ffffff",
-  surfaceContainerLow: "#eff4ff",
-  surfaceContainer: "#e5eeff",
-  surfaceContainerHigh: "#dce9ff",
-  onSurface: "#0b1c30",
-  onSurfaceVariant: "#444651",
-  outlineVariant: "#c5c5d3",
-  primary: "#00236f",
-  onPrimary: "#ffffff",
-  primaryContainer: "#1e3a8a",
-  secondary: "#006c49",
-  onSecondary: "#ffffff",
-  secondaryContainer: "#6cf8bb",
-  onSecondaryContainer: "#00714d",
-  error: "#ba1a1a",
-  onError: "#ffffff",
-  errorContainer: "#ffdad6",
-  onErrorContainer: "#93000a",
-};
-
-const typography = {
-  headlineLg: { fontFamily: "Inter", fontSize: 28, fontWeight: "700" as const, letterSpacing: -0.4 },
-  headlineMd: { fontFamily: "Inter", fontSize: 22, fontWeight: "700" as const, letterSpacing: -0.2 },
-  bodyLg: { fontFamily: "Inter", fontSize: 18, fontWeight: "400" as const, lineHeight: 26 },
-  bodyMd: { fontFamily: "Inter", fontSize: 15, fontWeight: "400" as const, lineHeight: 22 },
-  labelMd: { fontFamily: "Inter", fontSize: 14, fontWeight: "600" as const },
-  labelSm: { fontFamily: "Inter", fontSize: 12, fontWeight: "600" as const },
-};
-
-const spacing = { base: 4, xs: 8, sm: 16, md: 24, lg: 40, xl: 64, marginMobile: 20 };
-const radius = { sm: 4, DEFAULT: 8, md: 12, lg: 16, xl: 24, full: 9999 };
-
-const ambientShadow = {
-  shadowColor: colors.primary,
-  shadowOffset: { width: 0, height: 8 },
-  shadowOpacity: 0.08,
-  shadowRadius: 20,
-  elevation: 4,
-};
-
-// Presentation-only lookup: maps each dashboard option to an icon + tint.
-// Purely visual — does not alter the underlying options data or navigation logic.
-const OPTION_ICONS: Record<string, { icon: keyof typeof Ionicons.glyphMap; tint: "primary" | "error" }> = {
-  Language: { icon: "globe-outline", tint: "primary" },
-  WomenSafety: { icon: "shield-checkmark-outline", tint: "primary" },
-  Guide: { icon: "compass-outline", tint: "primary" },
-  SOS: { icon: "alert-circle-outline", tint: "error" },
-  Complaint: { icon: "document-text-outline", tint: "primary" },
-  PriceCheck: { icon: "pricetag-outline", tint: "primary" },
-  Crowd: { icon: "people-outline", tint: "primary" },
-  Equipment: { icon: "briefcase-outline", tint: "primary" },
-};
-
-// Presentation-only captions layered over the `ads` images — does not change
-// the ads array, the auto-scroll interval, or the scrollRef logic below.
-const AD_CAPTIONS = [
-  { badge: "20% OFF", badgeTint: "secondary" as const, title: "Coastal Escapes" },
-  { badge: "Verified", badgeTint: "primary" as const, title: "Old Town Trails" },
-  { badge: "New", badgeTint: "secondary" as const, title: "Mountain Retreats" },
-];
-
-const TABS: { key: string; label: string; icon: keyof typeof Ionicons.glyphMap; screen: string }[] = [
-  { key: "Home", label: "Home", icon: "home", screen: "Home" },
-  { key: "Chat", label: "Chat", icon: "chatbubbles-outline", screen: "ChatBot" },
-  { key: "Dashboard", label: "Dashboard", icon: "grid-outline", screen: "Dashboard" },
-  { key: "Profile", label: "Profile", icon: "person-outline", screen: "Profile" },
-];
-
 export default function HomeScreen() {
   const navigation = useNavigation<any>();
-  const scrollRef = useRef<ScrollView>(null);
+  const [offers, setOffers] = useState<any[]>([]);
+  const [userName, setUserName] = useState("Traveler");
+  const [userStatus, setUserStatus] = useState("ACTIVE");
+  const [unreadNotificationsCount, setUnreadNotificationsCount] = useState(0);
+  const [activeSOS, setActiveSOS] = useState<any>(null);
 
-  // --- Backend logic (unchanged) ------------------------------------------
-  const ads = [
-    "https://picsum.photos/400/200",
-    "https://picsum.photos/401/200",
-    "https://picsum.photos/402/200",
-  ];
+  const {
+    activeLocation,
+    isManual,
+    gpsStatus,
+    isDetecting,
+    detectGpsLocation,
+    showFallback,
+  } = useLocationContext();
 
-  const options = [
-    {
-      title: "Language Help",
-      screen: "Language",
-      img: "https://cdn-icons-png.flaticon.com/512/3898/3898082.png",
-    },
-    {
-      title: "Women Safety",
-      screen: "WomenSafety",
-      img: "https://cdn-icons-png.flaticon.com/512/2922/2922510.png",
-    },
-    {
-      title: "Local Guide",
-      screen: "Guide",
-      img: "https://cdn-icons-png.flaticon.com/512/201/201623.png",
-    },
-    {
-      title: "SOS Emergency",
-      screen: "SOS",
-      img: "https://cdn-icons-png.flaticon.com/512/565/565547.png",
-    },
-    {
-      title: "Complaints",
-      screen: "Complaint",
-      img: "https://cdn-icons-png.flaticon.com/512/942/942748.png",
-    },
-    {
-      title: "Price Check",
-      screen: "PriceCheck",
-      img: "https://cdn-icons-png.flaticon.com/512/1170/1170576.png",
-    },
-    {
-      title: "Crowd Status",
-      screen: "Crowd",
-      img: "https://cdn-icons-png.flaticon.com/512/747/747376.png",
-    },
-    {
-      title: "Safety Equipments",
-      screen: "Equipment",
-      img: "https://cdn-icons-png.flaticon.com/512/2965/2965567.png",
-    },
-  ];
+  // SOS hold button animation
+  const sosHoldAnim = useRef(new Animated.Value(0)).current;
+  const [holdingSOS, setHoldingSOS] = useState(false);
+
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return "Good morning";
+    if (hour < 17) return "Good afternoon";
+    return "Good evening";
+  };
 
   useEffect(() => {
-    let index = 0;
-
-    const interval = setInterval(() => {
-      index = (index + 1) % ads.length;
-
-      scrollRef.current?.scrollTo({
-        x: index * width * 0.88,
-        animated: true,
-      });
-    }, 3000);
-
-    return () => clearInterval(interval);
+    loadUserProfile();
+    fetchLiveOffers();
+    checkSOSStatus();
   }, []);
-  // --- End backend logic ---------------------------------------------------
+
+  useFocusEffect(
+    useCallback(() => {
+      loadUserProfile();
+      fetchUnreadCount();
+      checkSOSStatus();
+    }, [])
+  );
+
+  const fetchUnreadCount = async () => {
+    try {
+      const userStr = await AsyncStorage.getItem("user");
+      if (!userStr) return;
+      const user = JSON.parse(userStr);
+      const uid = user.id || user.user_id;
+      if (!uid) return;
+
+      const res = await api.get("/api/notifications/unread-count", {
+        params: { user_id: uid },
+      });
+      if (res.data && res.data.success) {
+        setUnreadNotificationsCount(res.data.unread_count || 0);
+      }
+    } catch {
+      // Clean fallback
+    }
+  };
+
+  const loadUserProfile = async () => {
+    try {
+      const userStr = await AsyncStorage.getItem("user");
+      if (!userStr) return;
+      const user = JSON.parse(userStr);
+      if (user.name) {
+        setUserName(user.name);
+      } else if (user.username) {
+        setUserName(user.username);
+      }
+      if (user.status) {
+        setUserStatus(user.status);
+      }
+    } catch {
+      // Clean fallback
+    }
+  };
+
+  const checkSOSStatus = async () => {
+    try {
+      const userStr = await AsyncStorage.getItem("user");
+      if (!userStr) return;
+      const user = JSON.parse(userStr);
+      const uid = user.id || user.user_id;
+      if (!uid) return;
+
+      const res = await api.get(`/sos/active/${uid}`);
+      if (res.data?.active && res.data?.incident) {
+        setActiveSOS(res.data.incident);
+      } else {
+        setActiveSOS(null);
+      }
+    } catch {
+      setActiveSOS(null);
+    }
+  };
+
+  const fetchLiveOffers = async () => {
+    try {
+      const res = await api.get("/offers");
+      if (Array.isArray(res.data)) {
+        setOffers(res.data);
+      }
+    } catch {
+      // Clean fallback
+    }
+  };
+
+  const handleSosPressIn = () => {
+    setHoldingSOS(true);
+    Animated.timing(sosHoldAnim, {
+      toValue: 1,
+      duration: 1800,
+      useNativeDriver: false,
+    }).start(({ finished }) => {
+      if (finished) {
+        navigation.navigate("SOS");
+      }
+    });
+  };
+
+  const handleSosPressOut = () => {
+    setHoldingSOS(false);
+    Animated.timing(sosHoldAnim, {
+      toValue: 0,
+      duration: 250,
+      useNativeDriver: false,
+    }).start();
+  };
 
   return (
-    <View style={styles.container}>
-      {/* HEADER */}
-      <View style={styles.appBar}>
-        <Text style={styles.logo}>TrustTrip</Text>
+    <CosmicBackground>
+      {/* 1. TOP HEADER & GREETING */}
+      <View style={styles.topHeader}>
+        <View style={styles.brandAndGreeting}>
+          <View style={styles.brandRow}>
+            <Text style={styles.brandTitle}>
+              Trust<Text style={{ color: colors.primary }}>Trip</Text>
+            </Text>
+          </View>
+          <Text style={styles.subGreeting}>
+            {getGreeting()}, <Text style={styles.userName}>{userName}</Text>
+          </Text>
+        </View>
 
-        <View style={styles.appBarActions}>
-          <TouchableOpacity style={styles.iconButton}>
-            <Ionicons name="notifications-outline" size={22} color={colors.primary} />
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={styles.iconButton}
+            onPress={() => navigation.navigate("Notifications")}
+            accessibilityLabel="Notifications"
+          >
+            <AppIcon name="notifications-outline" size={20} color={colors.textPrimary} />
+            {unreadNotificationsCount > 0 && (
+              <View style={styles.unreadDot}>
+                <Text style={styles.unreadText}>
+                  {unreadNotificationsCount > 9 ? "9+" : unreadNotificationsCount}
+                </Text>
+              </View>
+            )}
           </TouchableOpacity>
 
-          <TouchableOpacity onPress={() => navigation.navigate("Profile")}>
-            <Image
-              source={{ uri: "https://cdn-icons-png.flaticon.com/512/149/149071.png" }}
-              style={styles.profile}
+          <TouchableOpacity
+            style={styles.avatarButton}
+            onPress={() => navigation.navigate("Profile")}
+            accessibilityLabel="Profile"
+          >
+            <AppIcon name="person" size={18} color={colors.primary} />
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+      >
+        {/* ACTIVE SOS BANNER (IF AN EMERGENCY IS CURRENTLY UNDERWAY) */}
+        {activeSOS && (
+          <SurfaceCard
+            variant="danger"
+            style={styles.activeSosBanner}
+            onPress={() => navigation.navigate("SOS")}
+          >
+            <View style={styles.alertRow}>
+              <View style={styles.alertPulse}>
+                <AppIcon name="alert-circle" size={22} color={colors.danger} />
+              </View>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={[typography.h4, { color: colors.danger }]}>Emergency SOS Active</Text>
+                <Text style={[typography.bodySm, { color: colors.textSecondary }]} numberOfLines={1}>
+                  Incident #{activeSOS.id} • Responders alerted
+                </Text>
+              </View>
+              <AppIcon name="chevron-forward" size={18} color={colors.danger} />
+            </View>
+          </SurfaceCard>
+        )}
+
+        {/* ACTIVE LOCATION STATUS BAR (GPS VS MANUALLY SELECTED) */}
+        <ActiveLocationBar style={{ marginBottom: 12 }} />
+
+        {/* 2. TRUST STATUS HERO CARD ("Am I safe?") */}
+        <SurfaceCard style={styles.trustStatusCard} variant="elevated">
+          <View style={styles.trustHeader}>
+            <View style={styles.trustShieldContainer}>
+              <AppIcon name="shield-checkmark" size={24} color={colors.primary} />
+            </View>
+            <View style={styles.trustTextCol}>
+              <Text style={styles.trustCaption}>ACTIVE TRAVEL GUARDIAN</Text>
+              <Text style={styles.trustTitle}>
+                {userStatus === "ACTIVE" ? "Protected & Monitored" : "Attention Required"}
+              </Text>
+            </View>
+            <StatusBadge
+              label={userStatus === "ACTIVE" ? "Secured" : "Review"}
+              status={userStatus === "ACTIVE" ? "ready" : "danger"}
+            />
+          </View>
+
+          <View style={styles.trustDivider} />
+
+          <View style={styles.trustFooter}>
+            <TouchableOpacity
+              style={styles.locationStatusRow}
+              onPress={() => navigation.navigate("SelectLocation")}
+              activeOpacity={0.7}
+            >
+              <AppIcon
+                name={isManual ? "pencil" : gpsStatus === "ACTIVE" ? "location" : "location-outline"}
+                size={16}
+                color={isManual ? colors.cream : gpsStatus === "ACTIVE" ? colors.primary : colors.warning}
+              />
+              <Text style={styles.locationStatusText} numberOfLines={1}>
+                {isManual
+                  ? `✏️ Manual: ${activeLocation?.name || "Selected Location"}`
+                  : gpsStatus === "ACTIVE"
+                  ? `📍 GPS: ${activeLocation?.name || "Live Protection Active"}`
+                  : isDetecting
+                  ? "Detecting location..."
+                  : "Location Services Off"}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => navigation.navigate("CrowdMap")}
+              activeOpacity={0.7}
+              style={styles.mapLink}
+            >
+              <Text style={styles.mapLinkText}>View Radar</Text>
+              <AppIcon name="chevron-forward" size={14} color={colors.primary} />
+            </TouchableOpacity>
+          </View>
+        </SurfaceCard>
+
+        {/* 3. SAFETY OVERVIEW (3 COMPACT STAT CAPSULES) */}
+        <View style={styles.overviewGrid}>
+          <SurfaceCard style={styles.overviewCard} onPress={() => navigation.navigate("CrowdMap")}>
+            <View style={[styles.overviewIconWrap, { backgroundColor: `${colors.primary}18` }]}>
+              <AppIcon name="shield-outline" size={18} color={colors.primary} />
+            </View>
+            <Text style={styles.overviewLabel}>Safety Shield</Text>
+            <Text style={styles.overviewValue}>Active</Text>
+          </SurfaceCard>
+
+          <SurfaceCard
+            style={styles.overviewCard}
+            onPress={() => {
+              if (isManual || gpsStatus === "ACTIVE") {
+                navigation.navigate("SelectLocation");
+              } else {
+                showFallback(gpsStatus === "PERMISSION_DENIED" ? "permission_denied" : "gps_disabled");
+              }
+            }}
+          >
+            <View
+              style={[
+                styles.overviewIconWrap,
+                {
+                  backgroundColor: isManual
+                    ? `${colors.cream}18`
+                    : gpsStatus === "ACTIVE"
+                    ? `${colors.primary}18`
+                    : `${colors.warning}18`,
+                },
+              ]}
+            >
+              <AppIcon
+                name={isManual ? "pencil" : gpsStatus === "ACTIVE" ? "location" : "navigate-outline"}
+                size={18}
+                color={isManual ? colors.cream : gpsStatus === "ACTIVE" ? colors.primary : colors.warning}
+              />
+            </View>
+            <Text style={styles.overviewLabel}>{isManual ? "Manual Location" : "GPS Location"}</Text>
+            <Text
+              style={[
+                styles.overviewValue,
+                isManual
+                  ? { color: colors.cream }
+                  : gpsStatus !== "ACTIVE" && { color: colors.warning },
+              ]}
+            >
+              {isManual ? "Selected" : gpsStatus === "ACTIVE" ? "Ready" : isDetecting ? "Searching" : "Offline"}
+            </Text>
+          </SurfaceCard>
+
+          <SurfaceCard style={styles.overviewCard} onPress={() => navigation.navigate("Crowd")}>
+            <View style={[styles.overviewIconWrap, { backgroundColor: `${colors.cream}18` }]}>
+              <AppIcon name="people-outline" size={18} color={colors.cream} />
+            </View>
+            <Text style={styles.overviewLabel}>Crowd Level</Text>
+            <Text style={[styles.overviewValue, { color: colors.cream }]}>Moderate</Text>
+          </SurfaceCard>
+        </View>
+
+        {/* 4. HIGH-VISIBILITY EMERGENCY SOS CONTROL */}
+        <View style={styles.sosCardContainer}>
+          <TouchableOpacity
+            activeOpacity={0.9}
+            onPressIn={handleSosPressIn}
+            onPressOut={handleSosPressOut}
+            onPress={() => navigation.navigate("SOS")}
+            style={styles.sosTouchable}
+          >
+            <View style={styles.sosInnerContent}>
+              <View style={styles.sosIconWrap}>
+                <AppIcon name="alert-circle" size={24} color={colors.white} />
+              </View>
+              <View style={styles.sosTextCol}>
+                <Text style={styles.sosTitle}>EMERGENCY SOS</Text>
+                <Text style={styles.sosSubtitle}>
+                  {holdingSOS ? "Holding... Alerting Responders" : "Hold for 2 seconds to broadcast alert"}
+                </Text>
+              </View>
+              <AppIcon name="chevron-forward" size={18} color={colors.white} />
+            </View>
+
+            {/* Hold progress bar overlay */}
+            <Animated.View
+              style={[
+                styles.sosProgressBar,
+                {
+                  width: sosHoldAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: ["0%", "100%"],
+                  }),
+                },
+              ]}
             />
           </TouchableOpacity>
         </View>
-      </View>
 
-      {/* HERO */}
-      <LinearGradient
-        colors={[colors.primary, colors.primaryContainer]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.heroCard}
-      >
-        <Text style={styles.heroTitle}>Explore Safely 🌍</Text>
-        <Text style={styles.heroSubtitle}>
-          Your vigilant travel companion for secure journeys and verified experiences worldwide.
-        </Text>
-      </LinearGradient>
+        {/* 5. QUICK SAFETY TOOLS GRID */}
+        <View style={styles.sectionHeader}>
+          <Text style={typography.h3}>Quick Safety Tools</Text>
+        </View>
 
-      {/* MAIN CONTENT */}
-      <ScrollView
-        style={styles.content}
-        contentContainerStyle={styles.contentContainer}
-        showsVerticalScrollIndicator={false}
-      >
-        {/* STATS — overlaps the hero/content seam */}
+        <View style={styles.quickToolsGrid}>
+          <FeatureCard
+            title="Crowd Radar"
+            subtitle="Check real-time tourist density & alerts"
+            icon="people-outline"
+            iconColor={colors.primary}
+            onPress={() => navigation.navigate("Crowd")}
+            style={styles.toolCard}
+          />
+          <FeatureCard
+            title="Women Safety"
+            subtitle="Verified safe zones, routes & helpline"
+            icon="heart-outline"
+            iconColor={colors.cream}
+            onPress={() => navigation.navigate("WomenSafety")}
+            style={styles.toolCard}
+          />
+          <FeatureCard
+            title="Report Issue"
+            subtitle="Lodge tourist complaint & track resolution"
+            icon="chatbubble-ellipses-outline"
+            iconColor={colors.primary}
+            onPress={() => navigation.navigate("Complaint")}
+            style={styles.toolCard}
+          />
+          <FeatureCard
+            title="AI Assistant"
+            subtitle="24/7 travel advice & safety intelligence"
+            icon="sparkles-outline"
+            iconColor={colors.cream}
+            onPress={() => navigation.navigate("ChatBot")}
+            style={styles.toolCard}
+          />
+        </View>
+
+        {/* 6. TRAVELER SERVICES (HORIZONTAL ROW) */}
+        <View style={styles.sectionHeader}>
+          <Text style={typography.h3}>Traveler Services</Text>
+        </View>
+
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          style={styles.statsRow}
-          contentContainerStyle={styles.statsRowContent}
+          contentContainerStyle={styles.servicesScroll}
         >
-          <View style={styles.statPill}>
-            <View style={[styles.statIconWrap, { backgroundColor: colors.secondaryContainer }]}>
-              <Ionicons name="headset-outline" size={16} color={colors.onSecondaryContainer} />
+          <TouchableOpacity
+            style={styles.serviceItem}
+            onPress={() => navigation.navigate("Equipment")}
+            activeOpacity={0.75}
+          >
+            <View style={[styles.serviceIconCircle, { backgroundColor: `${colors.primary}18` }]}>
+              <AppIcon name="cube-outline" size={20} color={colors.primary} />
             </View>
-            <Text style={styles.statPillText}>24/7 Support</Text>
-          </View>
-
-          <View style={styles.statPill}>
-            <View style={[styles.statIconWrap, { backgroundColor: colors.errorContainer }]}>
-              <Ionicons name="alert-circle-outline" size={16} color={colors.error} />
-            </View>
-            <Text style={styles.statPillText}>SOS Ready</Text>
-          </View>
-
-          <View style={styles.statPill}>
-            <View style={[styles.statIconWrap, { backgroundColor: colors.surfaceContainerHigh }]}>
-              <Ionicons name="shield-checkmark-outline" size={16} color={colors.primary} />
-            </View>
-            <Text style={styles.statPillText}>100% Verified</Text>
-          </View>
-        </ScrollView>
-
-        {/* DASHBOARD */}
-        <Text style={styles.sectionTitle}>Travel Dashboard</Text>
-
-        <View style={styles.grid}>
-          {options.map((item, index) => {
-            const meta = OPTION_ICONS[item.screen] ?? { icon: "ellipse-outline", tint: "primary" as const };
-            const isAlert = meta.tint === "error";
-
-            return (
-              <TouchableOpacity
-                key={index}
-                style={styles.gridItem}
-                activeOpacity={0.7}
-                onPress={() => navigation.navigate(item.screen)}
-              >
-                <View
-                  style={[
-                    styles.gridIconWrap,
-                    { backgroundColor: isAlert ? colors.errorContainer : colors.surfaceContainerHigh },
-                  ]}
-                >
-                  <Ionicons name={meta.icon} size={22} color={isAlert ? colors.error : colors.primary} />
-                </View>
-                <Text style={styles.gridLabel} numberOfLines={2}>
-                  {item.title.replace(" Help", "").replace(" Emergency", "").replace("s", "")}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        {/* ADS SECTION */}
-        <View style={styles.sectionHeaderRow}>
-          <Text style={styles.subHeading}>Special Offers</Text>
-          <TouchableOpacity>
-            <Text style={styles.seeAll}>See all</Text>
+            <Text style={styles.serviceItemText}>Safety Gear</Text>
           </TouchableOpacity>
-        </View>
 
-        <ScrollView
-          ref={scrollRef}
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.adContainer}
-        >
-          {ads.map((ad, index) => {
-            const caption = AD_CAPTIONS[index % AD_CAPTIONS.length];
-            const badgeBg = caption.badgeTint === "secondary" ? colors.secondary : colors.primary;
+          <TouchableOpacity
+            style={styles.serviceItem}
+            onPress={() => navigation.navigate("Guide")}
+            activeOpacity={0.75}
+          >
+            <View style={[styles.serviceIconCircle, { backgroundColor: `${colors.cream}18` }]}>
+              <AppIcon name="compass-outline" size={20} color={colors.cream} />
+            </View>
+            <Text style={styles.serviceItemText}>Local Guides</Text>
+          </TouchableOpacity>
 
-            return (
-              <View key={index} style={styles.adCard}>
-                <Image source={{ uri: ad }} style={styles.adImage} />
-                <LinearGradient
-                  colors={["transparent", "rgba(11,28,48,0.75)"]}
-                  style={styles.adOverlay}
-                />
-                <View style={[styles.adBadge, { backgroundColor: badgeBg }]}>
-                  <Text style={styles.adBadgeText}>{caption.badge}</Text>
-                </View>
-                <Text style={styles.adTitle}>{caption.title}</Text>
-              </View>
-            );
-          })}
+          <TouchableOpacity
+            style={styles.serviceItem}
+            onPress={() => navigation.navigate("PriceCheck")}
+            activeOpacity={0.75}
+          >
+            <View style={[styles.serviceIconCircle, { backgroundColor: `${colors.primary}18` }]}>
+              <AppIcon name="pricetag-outline" size={20} color={colors.primary} />
+            </View>
+            <Text style={styles.serviceItemText}>Fair Prices</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.serviceItem}
+            onPress={() => navigation.navigate("Language")}
+            activeOpacity={0.75}
+          >
+            <View style={[styles.serviceIconCircle, { backgroundColor: `${colors.cream}18` }]}>
+              <AppIcon name="language-outline" size={20} color={colors.cream} />
+            </View>
+            <Text style={styles.serviceItemText}>Translator</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.serviceItem}
+            onPress={() => navigation.navigate("Dashboard")}
+            activeOpacity={0.75}
+          >
+            <View style={[styles.serviceIconCircle, { backgroundColor: `${colors.primary}18` }]}>
+              <AppIcon name="document-text-outline" size={20} color={colors.primary} />
+            </View>
+            <Text style={styles.serviceItemText}>Activity</Text>
+          </TouchableOpacity>
         </ScrollView>
 
-        {/* SAFETY CHECK */}
-        <View style={styles.safetyCard}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.safetyTitle}>Safety Check</Text>
-            <Text style={styles.safetySubtitle}>Scanning nearby safe zones...</Text>
-          </View>
-          <View style={styles.safetyStatus}>
-            <View style={styles.safetyStatusDot} />
-          </View>
+        {/* 7. VERIFIED PROMOTIONAL OFFERS */}
+        <View style={styles.sectionHeader}>
+          <Text style={typography.h3}>Verified Travel Offers</Text>
         </View>
 
-        <View style={{ height: spacing.xl + spacing.md }} />
+        {offers.length === 0 ? (
+          <SurfaceCard style={styles.emptyOffersCard}>
+            <AppIcon name="pricetag-outline" size={28} color={colors.textMuted} />
+            <Text style={styles.emptyOffersText}>
+              No active offers at this time. Check back soon for travel discounts.
+            </Text>
+          </SurfaceCard>
+        ) : (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.offersScroll}
+          >
+            {offers.map((offer) => (
+              <SurfaceCard key={offer.id} style={styles.offerCard}>
+                {offer.image_url ? (
+                  <Image source={{ uri: offer.image_url }} style={styles.offerImage} resizeMode="cover" />
+                ) : (
+                  <View style={styles.offerImagePlaceholder}>
+                    <AppIcon name="pricetag" size={28} color={colors.primary} />
+                  </View>
+                )}
+                {offer.discount_percentage ? (
+                  <View style={styles.offerBadge}>
+                    <Text style={styles.offerDiscountText}>{offer.discount_percentage}% OFF</Text>
+                  </View>
+                ) : null}
+                <View style={styles.offerBody}>
+                  <Text style={styles.offerCategory}>{offer.category || "PROMO"}</Text>
+                  <Text style={styles.offerTitle} numberOfLines={1}>
+                    {offer.title}
+                  </Text>
+                </View>
+              </SurfaceCard>
+            ))}
+          </ScrollView>
+        )}
       </ScrollView>
 
-      {/* BOTTOM TAB BAR */}
-      <View style={styles.tabBar}>
-        {TABS.map((tab) => {
-          const active = tab.key === "Home";
-          return (
-            <TouchableOpacity
-              key={tab.key}
-              style={[styles.tabItem, active && styles.tabItemActive]}
-              onPress={() => navigation.navigate(tab.screen)}
-              activeOpacity={0.7}
-            >
-              <Ionicons
-                name={tab.icon}
-                size={20}
-                color={active ? colors.primary : colors.onSurfaceVariant}
-              />
-              <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>{tab.label}</Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-    </View>
+      {/* BOTTOM NAV */}
+      <CustomBottomNav activeTab="Home" navigation={navigation} />
+    </CosmicBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.surface,
-  },
-
-  // --- Header --------------------------------------------------------------
-  appBar: {
+  topHeader: {
     flexDirection: "row",
+    alignItems: "center",
     justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: spacing.marginMobile,
-    paddingTop: Platform.OS === "ios" ? 55 : 40,
-    paddingBottom: spacing.sm,
-    backgroundColor: colors.surfaceContainerHigh,
+    paddingHorizontal: spacing.screenPadding,
+    paddingTop: 16,
+    paddingBottom: 14,
   },
-
-  logo: {
-    ...typography.headlineMd,
-    color: colors.primary,
+  brandAndGreeting: {
+    flex: 1,
   },
-
-  appBarActions: {
+  brandRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.sm,
   },
-
+  brandTitle: {
+    fontFamily: typography.displayLarge.fontFamily,
+    fontSize: 22,
+    fontWeight: "900",
+    color: colors.white,
+    letterSpacing: -0.5,
+  },
+  subGreeting: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+  userName: {
+    color: colors.white,
+    fontWeight: "700",
+  },
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
   iconButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.surface,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: colors.border,
+    position: "relative",
+  },
+  unreadDot: {
+    position: "absolute",
+    top: -2,
+    right: -2,
+    backgroundColor: colors.danger,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 4,
+    borderWidth: 2,
+    borderColor: colors.background,
+  },
+  unreadText: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: colors.white,
+  },
+  avatarButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.surface,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1.5,
+    borderColor: colors.primaryBorder,
+  },
+  scrollContent: {
+    paddingHorizontal: spacing.screenPadding,
+    paddingBottom: 24,
+  },
+  activeSosBanner: {
+    marginBottom: 16,
+    padding: 14,
+  },
+  alertRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  alertPulse: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: colors.dangerSurface,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  trustStatusCard: {
+    marginBottom: 16,
+    padding: 18,
+    borderColor: colors.primaryBorder,
+  },
+  trustHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  trustShieldContainer: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: colors.primaryGlow,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+    borderWidth: 1,
+    borderColor: colors.primaryBorder,
+  },
+  trustTextCol: {
+    flex: 1,
+  },
+  trustCaption: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: colors.primary,
+    letterSpacing: 0.8,
+  },
+  trustTitle: {
+    ...typography.h3,
+    fontSize: 16,
+    marginTop: 2,
+  },
+  trustDivider: {
+    height: 1,
+    backgroundColor: colors.border,
+    marginVertical: 14,
+  },
+  trustFooter: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  locationStatusRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  locationStatusText: {
+    ...typography.bodySm,
+    color: colors.textSecondary,
+  },
+  mapLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  mapLinkText: {
+    ...typography.caption,
+    color: colors.primary,
+    fontWeight: "700",
+  },
+  overviewGrid: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 16,
+  },
+  overviewCard: {
+    flex: 1,
+    padding: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  overviewIconWrap: {
     width: 36,
     height: 36,
-    borderRadius: radius.full,
+    borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
+    marginBottom: 6,
   },
-
-  profile: {
-    width: 40,
-    height: 40,
-    borderRadius: radius.full,
-    borderWidth: 2,
-    borderColor: colors.surfaceContainerLowest,
-  },
-
-  // --- Hero ------------------------------------------------------------------
-  heroCard: {
-    paddingHorizontal: spacing.marginMobile,
-    paddingTop: spacing.sm,
-    paddingBottom: spacing.xl,
-    borderBottomLeftRadius: radius.xl + spacing.sm,
-    borderBottomRightRadius: radius.xl + spacing.sm,
-  },
-
-  heroTitle: {
-    ...typography.headlineLg,
-    color: colors.onPrimary,
-  },
-
-  heroSubtitle: {
-    ...typography.bodyMd,
-    color: "#c7d5ff",
-    marginTop: spacing.xs,
-    maxWidth: "90%",
-  },
-
-  // --- Content shell (Clean Minimalist) --------------------------------------
-  content: {
-    flex: 1,
-    marginTop: -radius.xl,
-  },
-
-  contentContainer: {
-    paddingHorizontal: spacing.marginMobile,
-    paddingTop: spacing.sm,
-  },
-
-  // --- Stats pills (overlap hero seam) ---------------------------------------
-  statsRow: {
-    marginBottom: spacing.md,
-  },
-
-  statsRowContent: {
-    gap: spacing.xs,
-    paddingRight: spacing.marginMobile,
-  },
-
-  statPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: colors.surfaceContainerLowest,
-    borderRadius: radius.lg,
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.sm,
-    marginRight: spacing.xs,
-    ...ambientShadow,
-  },
-
-  statIconWrap: {
-    width: 28,
-    height: 28,
-    borderRadius: radius.full,
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: spacing.xs,
-  },
-
-  statPillText: {
-    ...typography.labelMd,
-    color: colors.onSurface,
-  },
-
-  // --- Sections ----------------------------------------------------------------
-  sectionTitle: {
-    ...typography.headlineMd,
-    color: colors.onSurface,
-    marginBottom: spacing.sm,
-  },
-
-  sectionHeaderRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginTop: spacing.xs,
-  },
-
-  subHeading: {
-    ...typography.headlineMd,
-    fontSize: 18,
-  },
-
-  seeAll: {
-    ...typography.labelMd,
-    color: colors.primary,
-  },
-
-  // --- Dashboard grid ------------------------------------------------------------
-  grid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-  },
-
-  gridItem: {
-    width: "25%",
-    alignItems: "center",
-    marginBottom: spacing.md,
-    paddingHorizontal: spacing.base,
-  },
-
-  gridIconWrap: {
-    width: 52,
-    height: 52,
-    borderRadius: radius.lg,
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: spacing.xs,
-  },
-
-  gridLabel: {
-    ...typography.labelSm,
-    fontWeight: "500",
-    color: colors.onSurfaceVariant,
+  overviewLabel: {
+    ...typography.caption,
+    fontSize: 10,
+    color: colors.textMuted,
     textAlign: "center",
   },
-
-  // --- Offer cards ------------------------------------------------------------------
-  adContainer: {
-    marginTop: spacing.sm,
-    marginBottom: spacing.md,
-  },
-
-  adCard: {
-    width: width * 0.62,
-    height: 160,
-    borderRadius: radius.lg,
-    marginRight: spacing.xs,
-    overflow: "hidden",
-    backgroundColor: colors.surfaceContainer,
-  },
-
-  adImage: {
-    ...StyleSheet.absoluteFillObject,
-    width: undefined,
-    height: undefined,
-  },
-
-  adOverlay: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: "60%",
-  },
-
-  adBadge: {
-    position: "absolute",
-    top: spacing.xs,
-    left: spacing.xs,
-    borderRadius: radius.full,
-    paddingHorizontal: spacing.xs,
-    paddingVertical: 3,
-  },
-
-  adBadgeText: {
-    ...typography.labelSm,
-    color: colors.onPrimary,
-    fontSize: 11,
-  },
-
-  adTitle: {
-    position: "absolute",
-    left: spacing.sm,
-    bottom: spacing.xs,
-    ...typography.labelMd,
-    fontSize: 16,
-    fontWeight: "700",
-    color: colors.onPrimary,
-  },
-
-  // --- Safety check card ---------------------------------------------------------------
-  safetyCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: colors.surfaceContainerLow,
-    borderRadius: radius.xl,
-    padding: spacing.md,
-  },
-
-  safetyTitle: {
-    ...typography.labelMd,
-    fontSize: 16,
-    fontWeight: "700",
-    color: colors.onSurface,
-  },
-
-  safetySubtitle: {
-    ...typography.bodyMd,
+  overviewValue: {
+    ...typography.label,
+    color: colors.textPrimary,
     fontSize: 13,
-    color: colors.onSurfaceVariant,
+    fontWeight: "700",
     marginTop: 2,
   },
-
-  safetyStatus: {
-    width: 40,
-    height: 40,
-    borderRadius: radius.full,
-    backgroundColor: colors.surfaceContainerLowest,
-    alignItems: "center",
-    justifyContent: "center",
-    ...ambientShadow,
+  sosCardContainer: {
+    marginBottom: 20,
+    borderRadius: radius.card,
+    overflow: "hidden",
+    backgroundColor: colors.danger,
+    ...shadows.glowDanger,
   },
-
-  safetyStatusDot: {
-    width: 10,
-    height: 10,
-    borderRadius: radius.full,
-    backgroundColor: colors.secondary,
+  sosTouchable: {
+    padding: 16,
+    position: "relative",
   },
-
- 
-
-  // --- Bottom tab bar ---------------------------------------------------------------------
-  tabBar: {
+  sosInnerContent: {
     flexDirection: "row",
-    backgroundColor: colors.surfaceContainerLowest,
-    paddingTop: spacing.xs,
-    paddingBottom: Platform.OS === "ios" ? spacing.md : spacing.xs,
-    borderTopWidth: 1,
-    borderTopColor: colors.outlineVariant,
+    alignItems: "center",
+    zIndex: 2,
   },
-
-  tabItem: {
-    flex: 1,
+  sosIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(255, 255, 255, 0.25)",
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: spacing.base,
+    marginRight: 12,
   },
-
-  tabItemActive: {
-    backgroundColor: colors.surfaceContainerHigh,
-    marginHorizontal: spacing.xs,
-    borderRadius: radius.md,
+  sosTextCol: {
+    flex: 1,
   },
-
-  tabLabel: {
-    ...typography.labelSm,
-    color: colors.onSurfaceVariant,
+  sosTitle: {
+    fontFamily: typography.h1.fontFamily,
+    fontSize: 17,
+    fontWeight: "800",
+    color: colors.white,
+    letterSpacing: 0.5,
+  },
+  sosSubtitle: {
+    ...typography.caption,
+    color: "rgba(255, 255, 255, 0.9)",
     marginTop: 2,
   },
-
-  tabLabelActive: {
+  sosProgressBar: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: "rgba(0, 0, 0, 0.3)",
+    zIndex: 1,
+  },
+  sectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 12,
+    marginTop: 4,
+  },
+  quickToolsGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    marginBottom: 16,
+  },
+  toolCard: {
+    width: (width - spacing.screenPadding * 2 - 10) / 2,
+  },
+  servicesScroll: {
+    gap: 10,
+    paddingBottom: 4,
+    marginBottom: 16,
+  },
+  serviceItem: {
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    minWidth: 90,
+  },
+  serviceIconCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 6,
+  },
+  serviceItemText: {
+    ...typography.caption,
+    color: colors.textPrimary,
+    fontWeight: "600",
+  },
+  emptyOffersCard: {
+    alignItems: "center",
+    padding: 24,
+    marginBottom: 16,
+  },
+  emptyOffersText: {
+    ...typography.bodySm,
+    color: colors.textMuted,
+    marginTop: 8,
+    textAlign: "center",
+  },
+  offersScroll: {
+    gap: 12,
+    paddingBottom: 4,
+  },
+  offerCard: {
+    width: 220,
+    padding: 0,
+    overflow: "hidden",
+  },
+  offerImage: {
+    width: "100%",
+    height: 110,
+    backgroundColor: colors.surfaceElevated,
+  },
+  offerImagePlaceholder: {
+    width: "100%",
+    height: 110,
+    backgroundColor: colors.surfaceElevated,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  offerBadge: {
+    position: "absolute",
+    top: 8,
+    left: 8,
+    backgroundColor: colors.cream,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radius.pill,
+  },
+  offerDiscountText: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: colors.background,
+  },
+  offerBody: {
+    padding: 12,
+  },
+  offerCategory: {
+    fontSize: 10,
+    fontWeight: "700",
     color: colors.primary,
+    textTransform: "uppercase",
+  },
+  offerTitle: {
+    ...typography.h4,
+    fontSize: 13,
+    marginTop: 2,
   },
 });

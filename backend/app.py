@@ -15,6 +15,14 @@ from routes.translate import translate_bp
 from routes.crowd_routes import crowd_bp
 from routes.device_routes import device_bp
 from routes.payment_routes import payment_bp
+from routes.admin_routes import admin_bp
+from routes.sos_routes import sos_bp
+from routes.offer_routes import offer_bp
+from routes.chatbot_routes import chatbot_bp
+from routes.ai_routes import ai_bp
+from routes.notification_routes import notification_bp
+
+from database.supabase_client import check_supabase_connection
 
 # Initialize Flask app
 logging.basicConfig(level=getattr(logging, Config.LOG_LEVEL, logging.INFO), format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -33,6 +41,12 @@ app.register_blueprint(translate_bp)
 app.register_blueprint(crowd_bp)
 app.register_blueprint(device_bp)
 app.register_blueprint(payment_bp)
+app.register_blueprint(admin_bp)
+app.register_blueprint(sos_bp)
+app.register_blueprint(offer_bp)
+app.register_blueprint(chatbot_bp)
+app.register_blueprint(ai_bp)
+app.register_blueprint(notification_bp)
 
 @app.route("/", methods=["GET"])
 def index():
@@ -42,6 +56,16 @@ def index():
         "app": "TrustTrip API",
         "version": "1.0.0"
     })
+
+@app.route("/health", methods=["GET"])
+def health():
+    """Health check verifying API operational status and Supabase connectivity."""
+    db_connected = check_supabase_connection()
+    return jsonify({
+        "status": "ok" if db_connected else "degraded",
+        "database": "supabase",
+        "connected": db_connected
+    }), (200 if db_connected else 503)
 
 if __name__ == "__main__":
     # Start Flask API using configurations loaded from environment

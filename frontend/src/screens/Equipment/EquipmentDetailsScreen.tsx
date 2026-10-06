@@ -3,16 +3,12 @@ import {
   View,
   Text,
   StyleSheet,
-  Image,
   TouchableOpacity,
   Alert,
-  SafeAreaView,
   ScrollView,
   ActivityIndicator,
 } from "react-native";
-
 import MapView, { Marker } from "react-native-maps";
-import * as Location from "expo-location";
 import api from "../../config/api";
 import {
   createPaymentOrder,
@@ -20,18 +16,15 @@ import {
   openRazorpayCheckout,
   verifyPayment,
 } from "../../services/paymentService";
-
-
-const equipmentImages = [
-  "https://cdn-icons-png.flaticon.com/512/3062/3062634.png", // Helmet
-  "https://cdn-icons-png.flaticon.com/512/2965/2965567.png", // First Aid Kit
-  "https://cdn-icons-png.flaticon.com/512/1048/1048941.png", // Torch
-  "https://cdn-icons-png.flaticon.com/512/2972/2972185.png", // Backpack
-  "https://cdn-icons-png.flaticon.com/512/3659/3659898.png", // Life Jacket
-  "https://cdn-icons-png.flaticon.com/512/3135/3135715.png", // Medical Kit
-  "https://cdn-icons-png.flaticon.com/512/4149/4149675.png", // Whistle
-  "https://cdn-icons-png.flaticon.com/512/942/942748.png", // Emergency Kit
-];
+import CosmicBackground from "../../components/common/CosmicBackground";
+import SurfaceCard from "../../components/common/SurfaceCard";
+import ScreenHeader from "../../components/common/ScreenHeader";
+import AppIcon from "../../components/common/AppIcon";
+import ActiveLocationBar from "../../components/common/ActiveLocationBar";
+import { useLocationContext } from "../../context/LocationContext";
+import locationService from "../../services/locationService";
+import { StatusBadge } from "../../components/common/StatusIndicator";
+import { colors, typography, radius, shadows, spacing } from "../../theme";
 
 export default function EquipmentDetailsScreen({ route, navigation }: any) {
   const { item } = route.params;
@@ -45,12 +38,24 @@ export default function EquipmentDetailsScreen({ route, navigation }: any) {
   const [placingOrder, setPlacingOrder] = useState(false);
   const [gettingLocation, setGettingLocation] = useState(false);
 
+  const { activeLocation, isManual, detectGpsLocation, showFallback } = useLocationContext();
+
   const mapRef = useRef<MapView>(null);
 
-  // 🔥 Fetch real price from backend
+  // Fetch real price from backend and sync active location
   useEffect(() => {
     fetchPrice();
-  }, []);
+    if (activeLocation) {
+      setUserLocation({
+        latitude: activeLocation.latitude,
+        longitude: activeLocation.longitude,
+      });
+      setDeliveryLocation({
+        latitude: activeLocation.latitude + 0.005,
+        longitude: activeLocation.longitude + 0.005,
+      });
+    }
+  }, [activeLocation]);
 
   const fetchPrice = async () => {
     if (!item || !item.id) return;
@@ -59,10 +64,9 @@ export default function EquipmentDetailsScreen({ route, navigation }: any) {
       const res = await api.get(`/equipment/${item.id}`);
       const data = res.data;
       if (data && typeof data.price !== "undefined") setPricePerItem(Number(data.price));
-      else setPricePerItem(200);
-    } catch (error) {
-      console.log("fetchPrice error:", error);
-      setPricePerItem(200);
+      else setPricePerItem(Number(item.price || 200));
+    } catch {
+      setPricePerItem(Number(item.price || 200));
     } finally {
       setLoadingPrice(false);
     }
@@ -70,49 +74,52 @@ export default function EquipmentDetailsScreen({ route, navigation }: any) {
 
   const totalPrice = pricePerItem * quantity;
 
-  // 📍 Get location
+  // Safe location attachment without blocking alerts
   const getLiveLocation = async () => {
+    if (activeLocation) {
+      setUserLocation({
+        latitude: activeLocation.latitude,
+        longitude: activeLocation.longitude,
+      });
+      setDeliveryLocation({
+        latitude: activeLocation.latitude + 0.005,
+        longitude: activeLocation.longitude + 0.005,
+      });
+      setShowMap(true);
+      return;
+    }
+
     setGettingLocation(true);
     try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") {
-        Alert.alert("Permission Denied", "Please allow location access in settings.");
-        return;
+      const coords = await locationService.getCurrentLocation();
+      if (coords) {
+        setUserLocation({
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+        });
+        setDeliveryLocation({
+          latitude: coords.latitude + 0.005,
+          longitude: coords.longitude + 0.005,
+        });
+        setShowMap(true);
+      } else {
+        showFallback("unavailable");
       }
-
-      const location = await Location.getCurrentPositionAsync({});
-      setUserLocation(location.coords);
-
-      // fake delivery location (start a little offset)
-      setDeliveryLocation({
-        latitude: location.coords.latitude + 0.01,
-        longitude: location.coords.longitude + 0.01,
-      });
-
-      setShowMap(true);
-    } catch (err) {
-      console.log("getLiveLocation error:", err);
-      Alert.alert("Error", "Unable to get location");
     } finally {
       setGettingLocation(false);
     }
   };
 
-  // 🚚 Simulate delivery movement
+  // Simulate delivery movement
   useEffect(() => {
     if (!deliveryLocation || !userLocation) return;
 
     const interval = setInterval(() => {
       setDeliveryLocation((prev: any) => {
         if (!prev) return prev;
-
         return {
-          latitude:
-            prev.latitude +
-            (userLocation.latitude - prev.latitude) * 0.1,
-          longitude:
-            prev.longitude +
-            (userLocation.longitude - prev.longitude) * 0.1,
+          latitude: prev.latitude + (userLocation.latitude - prev.latitude) * 0.1,
+          longitude: prev.longitude + (userLocation.longitude - prev.longitude) * 0.1,
         };
       });
     }, 2000);
@@ -120,10 +127,11 @@ export default function EquipmentDetailsScreen({ route, navigation }: any) {
     return () => clearInterval(interval);
   }, [deliveryLocation, userLocation]);
 
-  // Create and verify the payment through the backend. The backend is authoritative for amount and status.
+  // Authoritative Razorpay payment flow
   const handleOrder = async () => {
-    if (!userLocation) {
-      Alert.alert("Location required", "Please share live location before paying.");
+    const loc = userLocation || (activeLocation ? { latitude: activeLocation.latitude, longitude: activeLocation.longitude } : null);
+    if (!loc) {
+      showFallback('unavailable');
       return;
     }
 
@@ -131,7 +139,7 @@ export default function EquipmentDetailsScreen({ route, navigation }: any) {
     let paymentOrder: Awaited<ReturnType<typeof createPaymentOrder>> | null = null;
     let checkoutCompleted = false;
     try {
-      paymentOrder = await createPaymentOrder(Number(item.id), quantity, userLocation);
+      paymentOrder = await createPaymentOrder(Number(item.id), quantity, loc);
       const checkoutResponse = await openRazorpayCheckout(paymentOrder, item.name);
       checkoutCompleted = true;
       const verified = await verifyPayment(paymentOrder.order_id, checkoutResponse);
@@ -148,128 +156,128 @@ export default function EquipmentDetailsScreen({ route, navigation }: any) {
         try {
           await markPaymentFailed(paymentOrder.order_id, description);
         } catch {
-          // Payment failure reporting is best effort; preserve the original error state.
+          // Payment failure reporting is best effort
         }
       }
 
-      Alert.alert("Payment not completed", description, [{ text: "Try again" }]);
+      Alert.alert("Payment Incomplete", description, [{ text: "Try again" }]);
     } finally {
       setPlacingOrder(false);
     }
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      {/* Header */}
-      <View style={styles.header}>
+    <CosmicBackground>
+      <ScreenHeader
+        title="Equipment Checkout"
+        subtitle={item.name}
+        showBack
+        onBack={() => navigation.goBack()}
+      />
 
-
-      </View>
-
-      <ScrollView contentContainerStyle={styles.container}>
-        {/* Equipment image card */}
-        <View style={styles.imageContainer}>
-          <View style={styles.imageCircle}>
-            <Image
-              source={{
-                uri: equipmentImages[item.id % equipmentImages.length],
-              }}
-              style={styles.image}
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* HERO CARD */}
+        <SurfaceCard style={styles.heroCard} variant="elevated">
+          <View style={styles.iconCircle}>
+            <AppIcon name="cube" size={36} color={colors.primary} />
+          </View>
+          <Text style={styles.equipmentName}>{item.name}</Text>
+          <View style={styles.badgeRow}>
+            <StatusBadge
+              label={item.inStock === false ? "OUT OF STOCK" : "VERIFIED AVAILABLE"}
+              status={item.inStock === false ? "danger" : "ready"}
             />
           </View>
-
-          <View style={styles.badgeRow}>
-            <View style={[styles.badge, styles.badgeStock]}>
-              <Text style={styles.badgeStockText}>
-                {item?.inStock === false ? "Out of Stock" : "In Stock"}
-              </Text>
-            </View>
-            <View style={[styles.badge, styles.badgePriority]}>
-              <Text style={styles.badgePriorityText}>
-                {item?.priority || "High Priority"}
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Name / price / total card */}
-        <View style={styles.detailsCard}>
-          <View style={styles.detailsTopRow}>
-            <Text style={styles.name}>{item.name}</Text>
-            <Text style={styles.price}>
-              {loadingPrice ? (
-                <ActivityIndicator size="small" color="#4F46E5" />
-              ) : (
-                <>
-                  <Text style={styles.priceValue}>{`\u20B9${pricePerItem}`}</Text>
-                  <Text style={styles.priceUnit}> /day</Text>
-                </>
-              )}
-            </Text>
-          </View>
-
-          <Text style={styles.description}>
-            {item?.description || "Advanced field trauma supplies."}
+          <Text style={styles.descText}>
+            {item.description || "Certified personal travel safety equipment inspected for regional safety compliance."}
           </Text>
+        </SurfaceCard>
+
+        {/* PRICING & QUANTITY */}
+        <SurfaceCard style={styles.priceCard}>
+          <View style={styles.rowBetween}>
+            <Text style={styles.metaLabel}>PRICE PER UNIT</Text>
+            {loadingPrice ? (
+              <ActivityIndicator size="small" color={colors.primary} />
+            ) : (
+              <Text style={styles.priceValue}>₹{pricePerItem.toFixed(2)}</Text>
+            )}
+          </View>
 
           <View style={styles.divider} />
 
-          <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>
-              {`Total Estimate (x${quantity})`}
-            </Text>
-            <Text style={styles.totalValue}>{`\u20B9${totalPrice}`}</Text>
+          <View style={styles.rowBetween}>
+            <Text style={styles.metaLabel}>QUANTITY</Text>
+            <View style={styles.qtyControl}>
+              <TouchableOpacity
+                style={styles.qtyBtn}
+                onPress={() => quantity > 1 && setQuantity(quantity - 1)}
+              >
+                <Text style={styles.qtyBtnText}>−</Text>
+              </TouchableOpacity>
+              <Text style={styles.qtyValue}>{quantity}</Text>
+              <TouchableOpacity
+                style={[styles.qtyBtn, styles.qtyBtnAdd]}
+                onPress={() => setQuantity(quantity + 1)}
+              >
+                <Text style={[styles.qtyBtnText, { color: colors.background }]}>+</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
 
-        {/* Info card */}
-        <View style={styles.infoCard}>
-          <Text style={styles.infoIcon}>{"\u24D8"}</Text>
-          <Text style={styles.infoText}>
-            Equipment is inspected and sterilized before every rental.
-            Deliveries are typically completed within 2 hours in central
-            metropolitan areas.
+          <View style={styles.divider} />
+
+          <View style={styles.rowBetween}>
+            <Text style={typography.h4}>Total Amount</Text>
+            <Text style={styles.totalPriceValue}>₹{totalPrice.toFixed(2)}</Text>
+          </View>
+        </SurfaceCard>
+
+        {/* DELIVERY DISPATCH LOCATION */}
+        <SurfaceCard style={styles.locationCard}>
+          <View style={styles.locHeaderRow}>
+            <AppIcon name="location-outline" size={18} color={colors.primary} />
+            <Text style={[typography.h4, { marginLeft: 8 }]}>Dispatch Delivery Point</Text>
+          </View>
+
+          <Text style={styles.locSub}>
+            Express tourist safety gear dispatch is routed to your active GPS or chosen manual location.
           </Text>
-        </View>
 
-        {/* Quantity + Share location row */}
-        <View style={styles.actionRow}>
-          <View style={styles.quantityCard}>
-            <TouchableOpacity
-              style={styles.qtyBtn}
-              onPress={() => quantity > 1 && setQuantity(quantity - 1)}
-            >
-              <Text style={styles.qtyText}>-</Text>
-            </TouchableOpacity>
-
-            <Text style={styles.qtyNumber}>{quantity}</Text>
-
-            <TouchableOpacity
-              style={[styles.qtyBtn, styles.qtyBtnDark]}
-              onPress={() => setQuantity(quantity + 1)}
-            >
-              <Text style={styles.qtyText}>+</Text>
-            </TouchableOpacity>
-          </View>
+          <ActiveLocationBar style={{ marginVertical: 8 }} />
 
           <TouchableOpacity
-            style={[styles.locationBtn, gettingLocation && { opacity: 0.7 }]}
+            style={[styles.locBtn, userLocation && styles.locBtnDone]}
             onPress={getLiveLocation}
             disabled={gettingLocation}
           >
             {gettingLocation ? (
-              <ActivityIndicator color="#fff" />
+              <ActivityIndicator size="small" color={colors.background} />
             ) : (
-              <Text style={styles.locationText}>
-                {userLocation ? "Location Added \u2713" : "\u25CE  Share Location"}
-              </Text>
+              <>
+                <AppIcon
+                  name={userLocation ? "checkmark-circle" : "navigate-outline"}
+                  size={18}
+                  color={userLocation ? colors.background : colors.primary}
+                />
+                <Text style={[styles.locBtnText, userLocation && styles.locBtnTextDone]}>
+                  {userLocation
+                    ? activeLocation
+                      ? `${activeLocation.source === 'MANUAL' ? '✏️ Manual: ' : '📍 GPS: '}${activeLocation.name}`
+                      : `Attached: ${userLocation.latitude.toFixed(4)}, ${userLocation.longitude.toFixed(4)}`
+                    : "Attach Coordinates"}
+                </Text>
+              </>
             )}
           </TouchableOpacity>
-        </View>
+        </SurfaceCard>
 
-        {/* Map */}
+        {/* LIVE MAP TRACKER */}
         {showMap && userLocation && (
-          <View style={styles.mapContainer}>
+          <SurfaceCard style={styles.mapCard}>
             <MapView
               ref={mapRef}
               style={styles.map}
@@ -281,411 +289,251 @@ export default function EquipmentDetailsScreen({ route, navigation }: any) {
               }}
             >
               <Marker coordinate={userLocation} title="You" />
-
               {deliveryLocation && (
-                <Marker coordinate={deliveryLocation} title="Delivery" />
+                <Marker coordinate={deliveryLocation} title="Courier Dispatch" />
               )}
             </MapView>
-
-            <View style={styles.deliveryOverlay}>
-              <View style={styles.deliveryIconWrap}>
-                <Text style={styles.deliveryIconText}>{"\uD83D\uDE9A"}</Text>
-              </View>
-              <View>
-                <Text style={styles.deliveryTitle}>Delivery Vehicle</Text>
-                <Text style={styles.deliverySubtitle}>Est. 45 mins away</Text>
-              </View>
+            <View style={styles.mapNote}>
+              <AppIcon name="time-outline" size={14} color={colors.primary} />
+              <Text style={styles.mapNoteText}>Estimated courier transit: ~35 mins to verified location</Text>
             </View>
-          </View>
+          </SurfaceCard>
         )}
 
-        {/* spacer so last content isn't hidden behind footer */}
-        <View style={{ height: 24 }} />
+        <View style={{ height: 90 }} />
       </ScrollView>
 
-      {/* Footer - Place Order button stays fixed at bottom and is always clickable */}
+      {/* PINNED PAY NOW FOOTER */}
       <View style={styles.footer}>
+        <View style={styles.footerPriceCol}>
+          <Text style={styles.footerPriceLabel}>TOTAL PAYABLE</Text>
+          <Text style={styles.footerPriceValue}>₹{totalPrice.toFixed(2)}</Text>
+        </View>
+
         <TouchableOpacity
-          style={[styles.orderBtn, placingOrder && { opacity: 0.7 }]}
+          style={[styles.checkoutBtn, placingOrder && styles.btnDisabled]}
           onPress={handleOrder}
           disabled={placingOrder}
+          activeOpacity={0.85}
         >
           {placingOrder ? (
-            <ActivityIndicator color="#fff" />
+            <ActivityIndicator color={colors.background} />
           ) : (
-            <Text style={styles.orderText}>
-              {`Pay Now - \u20B9${totalPrice}`}
-            </Text>
+            <View style={styles.btnRow}>
+              <AppIcon name="card" size={18} color={colors.background} />
+              <Text style={styles.checkoutBtnText}>Pay with Razorpay</Text>
+            </View>
           )}
         </TouchableOpacity>
       </View>
-    </SafeAreaView>
+    </CosmicBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: "#F8FAFC",
+  scrollContent: {
+    paddingHorizontal: spacing.screenPadding,
+    paddingTop: 12,
+    paddingBottom: 24,
   },
-
-  header: {
-    flexDirection: "row",
+  heroCard: {
     alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: "#F8FAFC",
-    borderBottomWidth: 1,
-    borderBottomColor: "#E5E7EB",
+    padding: 22,
+    marginBottom: 14,
+    borderColor: colors.primaryBorder,
   },
-
-  headerIconBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#E0E7FF",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  headerIconText: {
-    fontSize: 18,
-    color: "#1E3A8A",
-    fontWeight: "700",
-  },
-
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: "800",
-    color: "#1E3A8A",
-  },
-
-  container: {
-    flex: 1,
-    backgroundColor: "#F8FAFC",
-    padding: 20,
-    paddingBottom: 140,
-  },
-
-  imageContainer: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 28,
-
-    alignItems: "center",
-    justifyContent: "center",
-
-    padding: 24,
-
-    shadowColor: "#000",
-    shadowOffset: {
-      width: 0,
-      height: 5,
-    },
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-
-    elevation: 5,
-  },
-
-  imageCircle: {
-    width: 160,
-    height: 160,
-    borderRadius: 80,
-    backgroundColor: "#E8ECFB",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  image: {
-    width: "55%",
-    height: "55%",
-    resizeMode: "contain",
-  },
-
-  badgeRow: {
-    flexDirection: "row",
-    marginTop: 18,
-  },
-
-  badge: {
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 20,
-    marginHorizontal: 6,
-  },
-
-  badgeStock: {
-    backgroundColor: "#D1FAE5",
-  },
-
-  badgeStockText: {
-    color: "#059669",
-    fontWeight: "700",
-    fontSize: 13,
-  },
-
-  badgePriority: {
-    backgroundColor: "#E5E7EB",
-  },
-
-  badgePriorityText: {
-    color: "#374151",
-    fontWeight: "700",
-    fontSize: 13,
-  },
-
-  detailsCard: {
-    backgroundColor: "#FFFFFF",
+  iconCircle: {
+    width: 64,
+    height: 64,
     borderRadius: 22,
-    padding: 20,
-    marginTop: 20,
-
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 4,
+    backgroundColor: colors.primaryGlow,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 12,
   },
-
-  detailsTopRow: {
+  equipmentName: {
+    ...typography.h3,
+    color: colors.white,
+    textAlign: "center",
+    marginBottom: 8,
+  },
+  badgeRow: {
+    marginBottom: 10,
+  },
+  descText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    textAlign: "center",
+    lineHeight: 18,
+  },
+  priceCard: {
+    padding: 16,
+    marginBottom: 14,
+  },
+  rowBetween: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "flex-start",
+    alignItems: "center",
   },
-
-  name: {
-    fontSize: 24,
+  metaLabel: {
+    fontSize: 10,
     fontWeight: "800",
-    color: "#111827",
-    flexShrink: 1,
-    paddingRight: 10,
+    color: colors.textMuted,
+    letterSpacing: 0.8,
   },
-
-  price: {
-    fontSize: 16,
-  },
-
   priceValue: {
-    fontSize: 22,
-    fontWeight: "800",
-    color: "#1E3A8A",
+    ...typography.h4,
+    color: colors.white,
   },
-
-  priceUnit: {
-    fontSize: 14,
-    color: "#6B7280",
-    fontWeight: "600",
+  totalPriceValue: {
+    ...typography.h3,
+    color: colors.primary,
+    fontSize: 18,
   },
-
-  description: {
-    fontSize: 14,
-    color: "#6B7280",
-    marginTop: 8,
-    lineHeight: 20,
-  },
-
   divider: {
     height: 1,
-    backgroundColor: "#E5E7EB",
-    marginVertical: 16,
+    backgroundColor: colors.border,
+    marginVertical: 12,
   },
-
-  totalRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-
-  totalLabel: {
-    fontSize: 15,
-    color: "#374151",
-    fontWeight: "600",
-  },
-
-  totalValue: {
-    fontSize: 22,
-    fontWeight: "800",
-    color: "#10B981",
-  },
-
-  infoCard: {
-    flexDirection: "row",
-    backgroundColor: "#DBEAFE",
-    padding: 16,
-    borderRadius: 18,
-    marginTop: 16,
-  },
-
-  infoIcon: {
-    fontSize: 18,
-    color: "#1E3A8A",
-    marginRight: 10,
-    marginTop: 2,
-  },
-
-  infoText: {
-    flex: 1,
-    fontSize: 13,
-    color: "#374151",
-    lineHeight: 20,
-  },
-
-  actionRow: {
-    flexDirection: "row",
-    marginTop: 20,
-  },
-
-  quantityCard: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 20,
+  qtyControl: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    flex: 1,
-    marginRight: 12,
-
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 4,
+    backgroundColor: colors.surfaceElevated,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 2,
   },
-
   qtyBtn: {
-    width: 40,
-    height: 40,
-    backgroundColor: "#E0E7FF",
-    borderRadius: 12,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-
-  qtyBtnDark: {
-    backgroundColor: "#1E3A8A",
-  },
-
-  qtyText: {
-    color: "#1E3A8A",
-    fontSize: 20,
-    fontWeight: "800",
-  },
-
-  qtyNumber: {
-    fontSize: 20,
-    fontWeight: "800",
-    color: "#111827",
-  },
-
-  locationBtn: {
-    backgroundColor: "#065F46",
-    paddingHorizontal: 16,
-    borderRadius: 18,
-    alignItems: "center",
-    justifyContent: "center",
-    flex: 1.2,
-
-    shadowColor: "#065F46",
-    shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
-    elevation: 5,
-  },
-
-  locationText: {
-    color: "#FFFFFF",
-    fontWeight: "700",
-    fontSize: 14,
-    textAlign: "center",
-  },
-
-  mapContainer: {
-    marginTop: 20,
-    borderRadius: 22,
-    overflow: "hidden",
-  },
-
-  map: {
-    height: 260,
-    width: "100%",
-  },
-
-  deliveryOverlay: {
-    position: "absolute",
-    left: 12,
-    right: 12,
-    bottom: 12,
-    backgroundColor: "#FFFFFF",
+    width: 32,
+    height: 32,
     borderRadius: 16,
-    padding: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.surface,
+  },
+  qtyBtnAdd: {
+    backgroundColor: colors.primary,
+  },
+  qtyBtnText: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: colors.white,
+  },
+  qtyValue: {
+    ...typography.h4,
+    color: colors.white,
+    paddingHorizontal: 14,
+  },
+  locationCard: {
+    padding: 16,
+    marginBottom: 14,
+  },
+  locHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
-
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.15,
-    shadowRadius: 6,
-    elevation: 5,
+    marginBottom: 4,
   },
-
-  deliveryIconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#1E3A8A",
+  locSub: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    marginBottom: 14,
+    lineHeight: 18,
+  },
+  locBtn: {
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    marginRight: 12,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.primaryBorder,
+    borderRadius: radius.button,
+    paddingVertical: 12,
+    gap: 8,
   },
-
-  deliveryIconText: {
-    fontSize: 16,
+  locBtnDone: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
   },
-
-  deliveryTitle: {
-    fontSize: 14,
+  locBtnText: {
+    ...typography.caption,
+    color: colors.primary,
+    fontWeight: "700",
+  },
+  locBtnTextDone: {
+    color: colors.background,
     fontWeight: "800",
-    color: "#111827",
   },
-
-  deliverySubtitle: {
-    fontSize: 12,
-    color: "#6B7280",
-    marginTop: 2,
+  mapCard: {
+    overflow: "hidden",
+    padding: 0,
+    marginBottom: 14,
   },
-
+  map: {
+    width: "100%",
+    height: 180,
+  },
+  mapNote: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 10,
+    backgroundColor: colors.surface,
+    gap: 6,
+  },
+  mapNoteText: {
+    fontSize: 11,
+    color: colors.textSecondary,
+  },
   footer: {
     position: "absolute",
+    bottom: 0,
     left: 0,
     right: 0,
-    bottom: 0,
-    padding: 12,
-    backgroundColor: "rgba(255,255,255,0.98)",
+    backgroundColor: colors.surface,
     borderTopWidth: 1,
-    borderTopColor: "#E5E7EB",
+    borderTopColor: colors.border,
+    flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: spacing.screenPadding,
+    paddingVertical: 14,
   },
-
-  orderBtn: {
-    backgroundColor: "#F97316",
-    paddingVertical: 18,
-    borderRadius: 20,
-    alignItems: "center",
-    width: "100%",
-
-    shadowColor: "#F97316",
-    shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-    elevation: 6,
+  footerPriceCol: {
+    justifyContent: "center",
   },
-
-  orderText: {
-    color: "#FFFFFF",
+  footerPriceLabel: {
+    fontSize: 9,
     fontWeight: "800",
-    fontSize: 16,
-    letterSpacing: 0.5,
+    color: colors.textMuted,
+    letterSpacing: 0.6,
+  },
+  footerPriceValue: {
+    ...typography.h3,
+    color: colors.primary,
+    fontSize: 20,
+    marginTop: 2,
+  },
+  checkoutBtn: {
+    backgroundColor: colors.primary,
+    borderRadius: radius.button,
+    paddingVertical: 14,
+    paddingHorizontal: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    ...shadows.glowPrimary,
+  },
+  btnRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  btnDisabled: {
+    opacity: 0.6,
+  },
+  checkoutBtnText: {
+    fontFamily: typography.button.fontFamily,
+    fontSize: 15,
+    fontWeight: "800",
+    color: colors.background,
   },
 });

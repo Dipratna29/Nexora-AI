@@ -8,10 +8,11 @@ from services.notification_service import send_notification_to_user
 
 complaint_bp = Blueprint("complaint", __name__)
 
-@complaint_bp.route("/complaint", methods=["POST"])
-def add_complaint():
 
-    data = request.json
+@complaint_bp.route("/complaint", methods=["POST"])
+@complaint_bp.route("/complaints", methods=["POST"])
+def add_complaint():
+    data = request.get_json(silent=True) or {}
 
     try:
         # Create complaint and get ID
@@ -36,20 +37,29 @@ def add_complaint():
                 )
         
         return jsonify({
+            "success": True,
             "message": "Complaint stored successfully",
-            "complaint_id": complaint_id
-        })
+            "complaint_id": complaint_id,
+            "data": {"id": complaint_id}
+        }), 201
     
     except Exception as e:
         print(f"Error creating complaint: {e}")
         return jsonify({
+            "success": False,
             "message": "Error storing complaint"
         }), 500
 
 
 @complaint_bp.route("/user-complaints/<username>", methods=["GET"])
-def get_user_complaints(username):
+@complaint_bp.route("/complaints/user/<username>", methods=["GET"])
+@complaint_bp.route("/complaints", methods=["GET"])
+def get_user_complaints_route(username=None):
+    if not username:
+        username = request.args.get("username")
+    
+    if not username:
+        return jsonify({"success": False, "message": "Username is required"}), 400
 
     complaints = get_complaints(username)
-
     return jsonify(complaints)

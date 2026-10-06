@@ -4,12 +4,19 @@ import {
   Text,
   FlatList,
   StyleSheet,
-  Alert,
-  SafeAreaView,
+  RefreshControl,
   TouchableOpacity,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useNavigation } from "@react-navigation/native";
 import api from "../../config/api";
+import CosmicBackground from "../../components/common/CosmicBackground";
+import SurfaceCard from "../../components/common/SurfaceCard";
+import ScreenHeader from "../../components/common/ScreenHeader";
+import AppIcon from "../../components/common/AppIcon";
+import { StatusBadge } from "../../components/common/StatusIndicator";
+import CustomBottomNav from "../../components/common/CustomBottomNav";
+import { colors, typography, radius, spacing } from "../../theme";
 
 type Order = {
   id: number;
@@ -20,378 +27,236 @@ type Order = {
   created_at: string;
 };
 
-const EQUIPMENT_ICONS: Record<string, string> = {
-  vest: "🛡️",
-  kit: "🧰",
-  flashlight: "🔦",
-  helmet: "⛑️",
-  glove: "🧤",
-  default: "📦",
-};
-
-function getIcon(name: string) {
-  const lower = name.toLowerCase();
-  for (const key of Object.keys(EQUIPMENT_ICONS)) {
-    if (lower.includes(key)) return EQUIPMENT_ICONS[key];
-  }
-  return EQUIPMENT_ICONS.default;
-}
-
-function getStatusStyle(status: string) {
-  switch (status.toLowerCase()) {
-    case "pending":
-      return {
-        badge: styles.statusPending,
-        dot: styles.dotPending,
-        text: styles.statusTextPending,
-      };
-    case "delivered":
-      return {
-        badge: styles.statusDelivered,
-        dot: styles.dotDelivered,
-        text: styles.statusTextDelivered,
-      };
-    case "cancelled":
-      return {
-        badge: styles.statusCancelled,
-        dot: styles.dotCancelled,
-        text: styles.statusTextCancelled,
-      };
-    default:
-      return {
-        badge: styles.statusPending,
-        dot: styles.dotPending,
-        text: styles.statusTextPending,
-      };
-  }
-}
-
-function formatOrderId(id: number) {
-  return `#TT-${String(id).padStart(5, "0")}`;
-}
-
-function formatDate(dateStr: string) {
-  const d = new Date(dateStr);
-  const day = String(d.getDate()).padStart(2, "0");
-  const month = d.toLocaleString("default", { month: "short" });
-  const year = d.getFullYear();
-  return `${day} ${month}, ${year}`;
-}
-
-function formatTime(dateStr: string) {
-  const d = new Date(dateStr);
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
 export default function MyOrdersScreen() {
   const [orders, setOrders] = useState<Order[]>([]);
+  const [loading, setLoading] = useState(false);
+  const navigation = useNavigation<any>();
 
   useEffect(() => {
-    fetchOrders();
+    loadOrders();
   }, []);
 
-  const fetchOrders = async () => {
+  const loadOrders = async () => {
+    setLoading(true);
     try {
       const user = await AsyncStorage.getItem("user");
-      if (!user) {
-        Alert.alert("Error", "User not logged in");
+      const parsed = JSON.parse(user || "{}");
+      const userId = parsed.id || parsed.user_id;
+
+      if (!userId) {
+        setLoading(false);
         return;
       }
-      const parsedUser = JSON.parse(user);
-      const user_id = parsedUser.id;
-      const res = await api.get(`/user-orders/${user_id}`);
-      setOrders(res.data);
-    } catch (error) {
-      console.log(error);
-      Alert.alert("Error", "Failed to load orders");
+
+      const res = await api.get(`/user-orders/${userId}`);
+      if (Array.isArray(res.data)) {
+        setOrders(res.data);
+      }
+    } catch {
+      // Fallback
+    } finally {
+      setLoading(false);
     }
   };
 
-  const renderItem = ({ item }: { item: Order }) => {
-    const statusStyle = getStatusStyle(item.status);
-    const qty = String(item.quantity).padStart(2, "0");
+  const formatDate = (dateStr: string) => {
+    try {
+      const d = new Date(dateStr);
+      return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    } catch {
+      return dateStr;
+    }
+  };
 
-    return (
-      <View style={styles.card}>
-        {/* Top Row: icon + name/id + status badge */}
-        <View style={styles.cardTop}>
-          <View style={styles.iconWrap}>
-            <Text style={styles.iconText}>{getIcon(item.name)}</Text>
-          </View>
-
-          <View style={styles.cardMeta}>
-            <Text style={styles.itemName} numberOfLines={2}>
-              {item.name}
-            </Text>
-            <Text style={styles.orderId}>{formatOrderId(item.id)}</Text>
-          </View>
-
-          <View style={[styles.statusBadge, statusStyle.badge]}>
-            <View style={[styles.statusDot, statusStyle.dot]} />
-            <Text style={[styles.statusLabel, statusStyle.text]}>
-              {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
-            </Text>
-          </View>
-        </View>
-
-        {/* Divider */}
-        <View style={styles.divider} />
-
-        {/* Quantity + Amount */}
-        <View style={styles.infoGrid}>
-          <View style={styles.infoCol}>
-            <Text style={styles.infoKey}>QUANTITY</Text>
-            <Text style={styles.infoVal}>{qty} {item.quantity === 1 ? "Unit" : "Units"}</Text>
-          </View>
-          <View style={styles.infoColRight}>
-            <Text style={styles.infoKey}>TOTAL AMOUNT</Text>
-            <Text style={styles.infoValPrice}>₹{Number(item.total_price).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</Text>
-          </View>
-        </View>
-
-        {/* Date + Time */}
-        <View style={styles.dateRow}>
-          <View style={styles.dateItem}>
-            <Text style={styles.dateIcon}>📅</Text>
-            <Text style={styles.dateText}>{formatDate(item.created_at)}</Text>
-          </View>
-          <View style={styles.dateItem}>
-            <Text style={styles.dateIcon}>🕐</Text>
-            <Text style={styles.dateText}>{formatTime(item.created_at)}</Text>
-          </View>
-        </View>
-      </View>
-    );
+  const getStatusType = (status: string) => {
+    const s = (status || "").toLowerCase();
+    if (s.includes("delivered") || s.includes("paid") || s.includes("captured")) return "ready";
+    if (s.includes("cancel") || s.includes("fail")) return "danger";
+    return "moderate";
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
-      {/* Hero Header */}
-      <View style={styles.hero}>
-        <Text style={styles.heroTitle}>Equipment Orders</Text>
-        <Text style={styles.heroSub}>
-          View all your safety equipment rental orders, status, and payment details.
-        </Text>
-      </View>
+    <CosmicBackground>
+      <ScreenHeader
+        title="My Gear Orders"
+        subtitle="Active reservations & delivery tracking"
+        showBack
+        onBack={() => navigation.goBack()}
+        rightAction={
+          <TouchableOpacity
+            style={styles.browseBtn}
+            onPress={() => navigation.navigate("Equipment")}
+          >
+            <AppIcon name="add" size={16} color={colors.background} />
+            <Text style={styles.browseBtnText}>Order Gear</Text>
+          </TouchableOpacity>
+        }
+      />
 
-      {/* List */}
-      <View style={styles.listWrap}>
+      <View style={styles.container}>
         <FlatList
           data={orders}
-          keyExtractor={(item) => item.id.toString()}
-          renderItem={renderItem}
-          showsVerticalScrollIndicator={false}
+          keyExtractor={(item) => String(item.id)}
           contentContainerStyle={styles.listContent}
-          ListEmptyComponent={
-            <View style={styles.emptyWrap}>
-              <Text style={styles.emptyIcon}>📦</Text>
-              <Text style={styles.emptyTitle}>No Orders Yet</Text>
-              <Text style={styles.emptySub}>
-                Rent safety equipment to see your orders here.
-              </Text>
-            </View>
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={loading}
+              onRefresh={loadOrders}
+              tintColor={colors.primary}
+              colors={[colors.primary]}
+            />
           }
+          ListEmptyComponent={
+            <SurfaceCard style={styles.emptyCard}>
+              <AppIcon name="cube-outline" size={36} color={colors.textMuted} />
+              <Text style={styles.emptyTitle}>No Orders Yet</Text>
+              <Text style={styles.emptyDesc}>
+                Rent verified tourist safety equipment with instant Razorpay delivery.
+              </Text>
+              <TouchableOpacity
+                style={styles.exploreBtn}
+                onPress={() => navigation.navigate("Equipment")}
+              >
+                <Text style={styles.exploreBtnText}>Browse Safety Equipment</Text>
+              </TouchableOpacity>
+            </SurfaceCard>
+          }
+          renderItem={({ item }) => (
+            <SurfaceCard style={styles.orderCard} variant="elevated">
+              <View style={styles.orderTopRow}>
+                <View style={styles.orderIconWrap}>
+                  <AppIcon name="cube" size={22} color={colors.primary} />
+                </View>
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <Text style={typography.h4}>{item.name}</Text>
+                  <Text style={styles.orderDate}>{formatDate(item.created_at)}</Text>
+                </View>
+                <StatusBadge
+                  label={item.status || "CONFIRMED"}
+                  status={getStatusType(item.status)}
+                />
+              </View>
+
+              <View style={styles.orderMetaRow}>
+                <View>
+                  <Text style={styles.metaLabel}>QUANTITY</Text>
+                  <Text style={styles.metaValue}>{item.quantity || 1} units</Text>
+                </View>
+                <View>
+                  <Text style={styles.metaLabel}>ORDER ID</Text>
+                  <Text style={styles.metaValue}>#{item.id}</Text>
+                </View>
+                <View style={{ alignItems: "flex-end" }}>
+                  <Text style={styles.metaLabel}>TOTAL PAID</Text>
+                  <Text style={[styles.metaValue, { color: colors.primary }]}>
+                    ₹{Number(item.total_price || 0).toFixed(2)}
+                  </Text>
+                </View>
+              </View>
+            </SurfaceCard>
+          )}
         />
       </View>
 
-    </SafeAreaView>
+      {/* BOTTOM NAV */}
+      <CustomBottomNav activeTab="Home" navigation={navigation} />
+    </CosmicBackground>
   );
 }
 
-const INDIGO = "#4050C8";
-const INDIGO_LIGHT = "#EEF2FF";
-
 const styles = StyleSheet.create({
-  safe: {
+  container: {
     flex: 1,
-    backgroundColor: "#4050C8",
+    paddingHorizontal: spacing.screenPadding,
+    paddingTop: 8,
   },
-
-  hero: {
-    backgroundColor: "#4050C8",
-    paddingHorizontal: 22,
-    paddingTop: 20,
-    paddingBottom: 36,
+  browseBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.primary,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: radius.pill,
+    gap: 4,
   },
-  heroTitle: {
-    color: "#FFFFFF",
-    fontSize: 28,
+  browseBtnText: {
+    fontSize: 12,
     fontWeight: "800",
-    letterSpacing: -0.5,
-  },
-  heroSub: {
-    color: "#C7CFEF",
-    fontSize: 14,
-    marginTop: 8,
-    lineHeight: 21,
-  },
-
-  listWrap: {
-    flex: 1,
-    backgroundColor: "#F0F2FA",
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    overflow: "hidden",
+    color: colors.background,
   },
   listContent: {
+    paddingBottom: 32,
+  },
+  orderCard: {
     padding: 16,
-    paddingBottom: 100,
+    marginBottom: 12,
   },
-
-  // Card
-  card: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 20,
-    padding: 18,
+  orderTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
     marginBottom: 14,
-    shadowColor: "#1a1a4a",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.07,
-    shadowRadius: 12,
-    elevation: 4,
   },
-
-  cardTop: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-  },
-  iconWrap: {
-    width: 52,
-    height: 52,
+  orderIconWrap: {
+    width: 44,
+    height: 44,
     borderRadius: 14,
-    backgroundColor: INDIGO_LIGHT,
+    backgroundColor: colors.primaryGlow,
+    alignItems: "center",
     justifyContent: "center",
-    alignItems: "center",
-    marginRight: 12,
   },
-  iconText: {
-    fontSize: 26,
-  },
-  cardMeta: {
-    flex: 1,
-    marginRight: 8,
-  },
-  itemName: {
-    fontSize: 16,
-    fontWeight: "800",
-    color: "#111827",
-    lineHeight: 22,
-  },
-  orderId: {
-    fontSize: 12,
-    color: "#9CA3AF",
-    marginTop: 3,
-    fontWeight: "500",
-  },
-
-  // Status badges
-  statusBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 20,
-    alignSelf: "flex-start",
+  orderDate: {
+    ...typography.caption,
+    color: colors.textMuted,
     marginTop: 2,
   },
-  statusDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    marginRight: 5,
-  },
-  statusLabel: {
-    fontSize: 12,
-    fontWeight: "700",
-  },
-
-  statusPending: { backgroundColor: "#FFF7E6" },
-  dotPending: { backgroundColor: "#F59E0B" },
-  statusTextPending: { color: "#B45309" },
-
-  statusDelivered: { backgroundColor: "#E8FAF0" },
-  dotDelivered: { backgroundColor: "#22C55E" },
-  statusTextDelivered: { color: "#166534" },
-
-  statusCancelled: { backgroundColor: "#FEF0F0" },
-  dotCancelled: { backgroundColor: "#EF4444" },
-  statusTextCancelled: { color: "#991B1B" },
-
-  divider: {
-    height: 1,
-    backgroundColor: "#F3F4F6",
-    marginVertical: 14,
-  },
-
-  infoGrid: {
+  orderMetaRow: {
     flexDirection: "row",
     justifyContent: "space-between",
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
   },
-  infoCol: {
-    flex: 1,
+  metaLabel: {
+    fontSize: 9,
+    fontWeight: "800",
+    color: colors.textMuted,
+    letterSpacing: 0.6,
   },
-  infoColRight: {
-    flex: 1,
-    alignItems: "flex-end",
-  },
-  infoKey: {
-    fontSize: 11,
+  metaValue: {
+    ...typography.caption,
+    color: colors.textPrimary,
     fontWeight: "700",
-    color: "#9CA3AF",
-    letterSpacing: 0.8,
-    marginBottom: 4,
+    marginTop: 2,
   },
-  infoVal: {
-    fontSize: 17,
-    fontWeight: "800",
-    color: "#111827",
-  },
-  infoValPrice: {
-    fontSize: 17,
-    fontWeight: "800",
-    color: INDIGO,
-  },
-
-  dateRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: 14,
-  },
-  dateItem: {
-    flexDirection: "row",
+  emptyCard: {
+    padding: 32,
     alignItems: "center",
-  },
-  dateIcon: {
-    fontSize: 13,
-    marginRight: 5,
-  },
-  dateText: {
-    fontSize: 13,
-    color: "#6B7280",
-    fontWeight: "500",
-  },
-
-  // Empty
-  emptyWrap: {
-    alignItems: "center",
-    marginTop: 80,
-  },
-  emptyIcon: {
-    fontSize: 64,
+    justifyContent: "center",
+    marginTop: 24,
+    gap: 8,
   },
   emptyTitle: {
-    fontSize: 20,
-    fontWeight: "800",
-    color: "#374151",
+    ...typography.h3,
+    color: colors.white,
+    marginTop: 8,
+  },
+  emptyDesc: {
+    ...typography.bodySm,
+    color: colors.textMuted,
+    textAlign: "center",
+    maxWidth: 240,
+  },
+  exploreBtn: {
+    backgroundColor: colors.primary,
+    borderRadius: radius.button,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
     marginTop: 14,
   },
-  emptySub: {
-    fontSize: 14,
-    color: "#9CA3AF",
-    marginTop: 6,
-    textAlign: "center",
-    paddingHorizontal: 40,
+  exploreBtnText: {
+    ...typography.caption,
+    fontWeight: "800",
+    color: colors.background,
   },
-
-
 });

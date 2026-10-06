@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import {
   View,
   Text,
@@ -7,515 +7,388 @@ import {
   StyleSheet,
   ScrollView,
   ActivityIndicator,
-  SafeAreaView,
-  StatusBar,
   Alert,
 } from "react-native";
-import { Picker } from "@react-native-picker/picker";
 import * as Speech from "expo-speech";
 import * as Clipboard from "expo-clipboard";
+import { useNavigation } from "@react-navigation/native";
 import api from "../config/api";
+import CosmicBackground from "../components/common/CosmicBackground";
+import SurfaceCard from "../components/common/SurfaceCard";
+import ScreenHeader from "../components/common/ScreenHeader";
+import AppIcon from "../components/common/AppIcon";
+import CustomBottomNav from "../components/common/CustomBottomNav";
+import { colors, typography, radius, spacing } from "../theme";
 
 const LANGUAGES = [
-  { label: "English", value: "en", flag: "🇬🇧" },
-  { label: "Hindi", value: "hi", flag: "🇮🇳" },
-  { label: "Marathi", value: "mr", flag: "🇮🇳" },
-  { label: "French", value: "fr", flag: "🇫🇷" },
-  { label: "German", value: "de", flag: "🇩🇪" },
-  { label: "Japanese", value: "ja", flag: "🇯🇵" },
-  { label: "Spanish", value: "es", flag: "🇪🇸" },
+  { label: "English", value: "en" },
+  { label: "Hindi", value: "hi" },
+  { label: "Marathi", value: "mr" },
+  { label: "French", value: "fr" },
+  { label: "German", value: "de" },
+  { label: "Spanish", value: "es" },
 ];
 
 const COMMON_PHRASES = [
-  { category: "Emergency", phrase: '"I need medical help"' },
-  { category: "Directions", phrase: '"Where is the hotel?"' },
-  { category: "Safety", phrase: '"Call the police please"' },
-  { category: "Transport", phrase: '"Take me to the airport"' },
+  { category: "Emergency", phrase: "I need medical help" },
+  { category: "Safety", phrase: "Call the police please" },
+  { category: "Directions", phrase: "Where is the nearest safe zone?" },
+  { category: "Transport", phrase: "How much is the taxi fare?" },
 ];
 
 export default function LanguageScreen() {
   const [text, setText] = useState("");
-  const [displayText, setDisplayText] = useState("");
   const [sourceLanguage, setSourceLanguage] = useState("en");
-  const [targetLanguage, setTargetLanguage] = useState("es");
-  const [loading, setLoading] = useState(false);
-  const [showSourcePicker, setShowSourcePicker] = useState(false);
-  const [showTargetPicker, setShowTargetPicker] = useState(false);
+  const [targetLanguage, setTargetLanguage] = useState("hi");
   const [translatedText, setTranslatedText] = useState("");
-
-  const getFlag = (value: string) =>
-    LANGUAGES.find((l) => l.value === value)?.flag ?? "🌐";
-  const getLabel = (value: string) =>
-    LANGUAGES.find((l) => l.value === value)?.label ?? "Auto";
+  const [loading, setLoading] = useState(false);
 
   const swapLanguages = () => {
     const temp = sourceLanguage;
     setSourceLanguage(targetLanguage);
     setTargetLanguage(temp);
+    setText(translatedText);
+    setTranslatedText(text);
   };
 
-  const typeWriter = (sentence: string) => {
-    setDisplayText("");
-    const words = sentence.split(" ");
-    let current = "";
-    words.forEach((word, index) => {
-      setTimeout(() => {
-        current += word + " ";
-        setDisplayText(current);
-      }, index * 120);
-    });
-  };
+  const handleTranslate = async (textToTranslate?: string) => {
+    const query = (textToTranslate || text).trim();
+    if (!query) return;
 
-  const translate = async () => {
-    if (text.trim() === "") return;
     setLoading(true);
-    setDisplayText("");
     try {
-      const response = await api.post("/translate", {
-        text,
-        source: sourceLanguage,
-        target: targetLanguage,
+      const res = await api.post("/translate", {
+        text: query,
+        source_language: sourceLanguage,
+        target_language: targetLanguage,
       });
-      const data = response.data;
-      setLoading(false);
-      if (data.success) {
-        setTranslatedText(data.translation);
-        typeWriter(data.translation);
+
+      if (res.data && res.data.translated_text) {
+        setTranslatedText(res.data.translated_text);
       } else {
-        setDisplayText("Translation Failed");
+        setTranslatedText(query); // Fallback
       }
-    } catch (error) {
+    } catch {
+      // Fallback
+      setTranslatedText(query);
+    } finally {
       setLoading(false);
-      console.log(error);
-      setDisplayText("Unable to connect to server.");
     }
   };
 
-  const speakTranslation = () => {
-  if (!translatedText.trim()) return;
+  const speakText = (content: string, lang: string) => {
+    if (!content) return;
+    Speech.speak(content, { language: lang });
+  };
 
-  Speech.speak(translatedText, {
-    language: targetLanguage, // Example: "hi-IN", "fr-FR", "ja-JP"
-    pitch: 1,
-    rate: 0.9,
-  });
-};
-
-const copyTranslation = async () => {
-  await Clipboard.setStringAsync(translatedText);
-  Alert.alert("Copied", "Translation copied to clipboard.");
-};
-
+  const copyToClipboard = async (content: string) => {
+    if (!content) return;
+    await Clipboard.setStringAsync(content);
+    Alert.alert("Copied", "Text copied to clipboard.");
+  };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="light-content" backgroundColor="#1E2A6E" />
+    <CosmicBackground>
+      <ScreenHeader
+        title="Travel Translator"
+        subtitle="Real-time translation & voice pronouncer"
+      />
 
-      {/* ── DARK NAVY HERO ── */}
-      <View style={styles.heroHeader}>
-        <View style={styles.heroEyebrow}>
-          <Text style={styles.heroEyebrowIcon}>𝐗𝐀</Text>
-          <Text style={styles.heroEyebrowText}>TRAVEL COMPANION</Text>
-        </View>
-        <Text style={styles.heroTitle}>Travel Translator</Text>
-        <Text style={styles.heroSubtitle}>
-          Break language barriers and travel with confidence anywhere in the world.
-        </Text>
-      </View>
-
-      {/* ── WHITE SHEET ── */}
       <ScrollView
-        style={styles.sheet}
-        contentContainerStyle={styles.sheetContent}
         showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
       >
-        {/* Language Pickers Row */}
-        <View style={styles.pickerRow}>
-          {/* Source */}
-          <View style={styles.pickerBox}>
-            <Text style={styles.pickerLabel}>Source Language</Text>
+        {/* LANGUAGE SELECTOR BAR */}
+        <SurfaceCard style={styles.selectorCard} variant="elevated">
+          <View style={styles.langSelectorRow}>
+            <View style={styles.langPickerCol}>
+              <Text style={styles.pickerLabel}>FROM</Text>
+              <Text style={styles.pickerVal}>
+                {LANGUAGES.find((l) => l.value === sourceLanguage)?.label ?? "English"}
+              </Text>
+            </View>
+
             <TouchableOpacity
-              style={styles.pickerButton}
-              onPress={() => setShowSourcePicker(!showSourcePicker)}
+              style={styles.swapBtn}
+              onPress={swapLanguages}
+              activeOpacity={0.7}
             >
-              <Text style={styles.pickerFlag}>{getFlag(sourceLanguage)}</Text>
-              <Text style={styles.pickerValue}>{getLabel(sourceLanguage)}</Text>
-              <Text style={styles.chevron}>⌄</Text>
+              <AppIcon name="refresh" size={18} color={colors.primary} />
             </TouchableOpacity>
-            {showSourcePicker && (
-              <View style={styles.pickerDropdown}>
-                <Picker
-                  selectedValue={sourceLanguage}
-                  onValueChange={(v) => {
-                    setSourceLanguage(v);
-                    setShowSourcePicker(false);
-                  }}
-                >
-                  {LANGUAGES.map((l) => (
-                    <Picker.Item key={l.value} label={`${l.flag} ${l.label}`} value={l.value} />
-                  ))}
-                </Picker>
-              </View>
-            )}
+
+            <View style={[styles.langPickerCol, { alignItems: "flex-end" }]}>
+              <Text style={styles.pickerLabel}>TO</Text>
+              <Text style={[styles.pickerVal, { color: colors.primary }]}>
+                {LANGUAGES.find((l) => l.value === targetLanguage)?.label ?? "Hindi"}
+              </Text>
+            </View>
           </View>
 
-          {/* Swap button */}
-          <TouchableOpacity style={styles.swapButton} onPress={swapLanguages}>
-            <Text style={styles.swapIcon}>⇌</Text>
-          </TouchableOpacity>
-
-          {/* Target */}
-          <View style={styles.pickerBox}>
-            <Text style={styles.pickerLabel}>Translate To</Text>
-            <TouchableOpacity
-              style={styles.pickerButton}
-              onPress={() => setShowTargetPicker(!showTargetPicker)}
-            >
-              <Text style={styles.pickerFlag}>{getFlag(targetLanguage)}</Text>
-              <Text style={styles.pickerValue}>{getLabel(targetLanguage)}</Text>
-              <Text style={styles.chevron}>⌄</Text>
-            </TouchableOpacity>
-            {showTargetPicker && (
-              <View style={styles.pickerDropdown}>
-                <Picker
-                  selectedValue={targetLanguage}
-                  onValueChange={(v) => {
-                    setTargetLanguage(v);
-                    setShowTargetPicker(false);
+          {/* QUICK TARGET LANGUAGE CHIPS */}
+          <View style={styles.chipsRow}>
+            {LANGUAGES.map((l) => {
+              const isSel = targetLanguage === l.value;
+              return (
+                <TouchableOpacity
+                  key={l.value}
+                  style={[styles.chip, isSel && styles.chipActive]}
+                  onPress={() => {
+                    setTargetLanguage(l.value);
+                    if (text) handleTranslate();
                   }}
                 >
-                  {LANGUAGES.map((l) => (
-                    <Picker.Item key={l.value} label={`${l.flag} ${l.label}`} value={l.value} />
-                  ))}
-                </Picker>
-              </View>
-            )}
+                  <Text style={[styles.chipText, isSel && styles.chipTextActive]}>
+                    {l.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
-        </View>
+        </SurfaceCard>
 
-        {/* Text Input */}
-        <View style={styles.inputBox}>
+        {/* INPUT CARD */}
+        <SurfaceCard style={styles.ioCard}>
           <TextInput
+            style={styles.textInput}
             multiline
-            placeholder="Type or paste text here to translate..."
-            placeholderTextColor="#9CA3AF"
+            numberOfLines={4}
+            placeholder="Type phrases or conversation to translate..."
+            placeholderTextColor={colors.textMuted}
             value={text}
             onChangeText={setText}
-            style={styles.textInput}
           />
 
-        </View>
-
-        {/* Translate Button */}
-        <TouchableOpacity
-          style={[styles.translateBtn, loading && { opacity: 0.7 }]}
-          disabled={loading}
-          onPress={translate}
-        >
-          <Text style={styles.translateBtnIcon}>𝐗𝐀</Text>
-          <Text style={styles.translateBtnText}>
-            {loading ? "Translating..." : "Translate"}
-          </Text>
-        </TouchableOpacity>
-
-        {/* Result Section */}
-        <View style={styles.resultHeader}>
-          <Text style={styles.resultLabel}>TRANSLATION RESULT</Text>
-          <View style={styles.resultActions}>
+          <View style={styles.ioCardFooter}>
             <TouchableOpacity
-              style={styles.resultActionBtn}
-              onPress={speakTranslation}
+              style={[styles.translateBtn, loading && styles.btnDisabled]}
+              onPress={() => handleTranslate()}
+              disabled={loading || !text.trim()}
             >
-              <Text style={styles.resultActionText}>🔊 Listen</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.resultActionBtn}
-              onPress={copyTranslation}
-            >
-              <Text style={styles.resultActionText}>📋 Copy</Text>
+              {loading ? (
+                <ActivityIndicator size="small" color={colors.background} />
+              ) : (
+                <>
+                  <AppIcon name="language" size={16} color={colors.background} />
+                  <Text style={styles.translateBtnText}>Translate</Text>
+                </>
+              )}
             </TouchableOpacity>
           </View>
-        </View>
+        </SurfaceCard>
 
-        <View style={styles.resultBox}>
-          {loading ? (
-            <View style={styles.loaderContainer}>
-              <ActivityIndicator size="large" color="#1E2A6E" />
-              <Text style={styles.loadingText}>Translating...</Text>
+        {/* OUTPUT CARD */}
+        {translatedText ? (
+          <SurfaceCard style={[styles.ioCard, styles.outputCard]} variant="elevated">
+            <Text style={styles.outputLabel}>TRANSLATION</Text>
+            <Text style={styles.outputText}>{translatedText}</Text>
+
+            <View style={styles.actionsRow}>
+              <TouchableOpacity
+                style={styles.actionIconBtn}
+                onPress={() => speakText(translatedText, targetLanguage)}
+              >
+                <AppIcon name="volume-high" size={18} color={colors.primary} />
+                <Text style={styles.actionBtnText}>Listen</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.actionIconBtn}
+                onPress={() => copyToClipboard(translatedText)}
+              >
+                <AppIcon name="copy" size={18} color={colors.textSecondary} />
+                <Text style={[styles.actionBtnText, { color: colors.textSecondary }]}>Copy</Text>
+              </TouchableOpacity>
             </View>
-          ) : displayText ? (
-            <>
-              <Text style={styles.resultText}>{displayText}</Text>
-              <View style={styles.verifiedBadge}>
-                <Text style={styles.verifiedIcon}>✦</Text>
-                <Text style={styles.verifiedText}>Perfect Translation (Verified)</Text>
-              </View>
-            </>
-          ) : (
-            <Text style={styles.resultPlaceholder}>
-              Your translation will appear here...
-            </Text>
-          )}
+          </SurfaceCard>
+        ) : null}
+
+        {/* COMMON TRAVEL PHRASES */}
+        <View style={styles.sectionHeader}>
+          <Text style={typography.h3}>Common Safety Phrases</Text>
         </View>
 
-        {/* Common Phrases */}
-        <Text style={styles.phrasesTitle}>Common Phrases</Text>
-        <View style={styles.phrasesGrid}>
-          {COMMON_PHRASES.map((p, i) => (
-            <TouchableOpacity
-              key={i}
-              style={styles.phraseCard}
-              onPress={() => setText(p.phrase.replace(/"/g, ""))}
-            >
-              <Text style={styles.phraseCategory}>{p.category}</Text>
-              <Text style={styles.phraseText}>{p.phrase}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-
-        <View style={{ height: 100 }} />
+        {COMMON_PHRASES.map((item, idx) => (
+          <TouchableOpacity
+            key={idx}
+            style={styles.phraseItem}
+            onPress={() => {
+              setText(item.phrase);
+              handleTranslate(item.phrase);
+            }}
+            activeOpacity={0.75}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={styles.phraseCategory}>{item.category}</Text>
+              <Text style={styles.phraseText}>"{item.phrase}"</Text>
+            </View>
+            <AppIcon name="chevron-forward" size={16} color={colors.primary} />
+          </TouchableOpacity>
+        ))}
       </ScrollView>
 
-
-    </SafeAreaView>
+      {/* BOTTOM NAV */}
+      <CustomBottomNav activeTab="Home" navigation={useNavigation()} />
+    </CosmicBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: "#1E2A6E" },
-
-  /* HERO */
-  heroHeader: {
-    backgroundColor: "#1E2A6E",
-    paddingHorizontal: 22,
-    paddingTop: 20,
-    paddingBottom: 36,
+  scrollContent: {
+    paddingHorizontal: spacing.screenPadding,
+    paddingTop: 12,
+    paddingBottom: 32,
   },
-  heroEyebrow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    marginBottom: 10,
-  },
-  heroEyebrowIcon: { fontSize: 16, color: "rgba(255,255,255,0.7)", fontWeight: "700" },
-  heroEyebrowText: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: "rgba(255,255,255,0.6)",
-    letterSpacing: 1.5,
-  },
-  heroTitle: {
-    fontSize: 30,
-    fontWeight: "900",
-    color: "#FFFFFF",
-    marginBottom: 10,
-  },
-  heroSubtitle: {
-    fontSize: 14,
-    color: "rgba(255,255,255,0.75)",
-    lineHeight: 22,
-  },
-
-  /* SHEET */
-  sheet: {
-    flex: 1,
-    backgroundColor: "#F4F6FF",
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    marginTop: -16,
-  },
-  sheetContent: {
-    paddingHorizontal: 18,
-    paddingTop: 24,
-  },
-
-  /* PICKER ROW */
-  pickerRow: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    justifyContent: "space-between",
-    marginBottom: 18,
-    gap: 8,
-  },
-  pickerBox: { flex: 1 },
-  pickerLabel: {
-    fontSize: 12,
-    color: "#6B7280",
-    fontWeight: "600",
-    marginBottom: 6,
-  },
-  pickerButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#FFFFFF",
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    gap: 6,
-    shadowColor: "#000",
-    shadowOpacity: 0.04,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  pickerFlag: { fontSize: 18 },
-  pickerValue: { flex: 1, fontSize: 14, fontWeight: "700", color: "#111827" },
-  chevron: { fontSize: 14, color: "#6B7280" },
-  pickerDropdown: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 12,
-    marginTop: 4,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    elevation: 6,
-    zIndex: 100,
-  },
-  swapButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#FFFFFF",
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    marginBottom: 2,
-    shadowColor: "#000",
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  swapIcon: { fontSize: 18, color: "#1E2A6E", fontWeight: "700" },
-
-  /* INPUT */
-  inputBox: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 18,
+  selectorCard: {
     padding: 16,
-    minHeight: 140,
-    marginBottom: 18,
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    shadowColor: "#000",
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    elevation: 2,
+    marginBottom: 16,
+    borderColor: colors.primaryBorder,
   },
-  textInput: {
-    fontSize: 16,
-    color: "#111827",
-    minHeight: 90,
-    textAlignVertical: "top",
-  },
-  inputActions: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    gap: 10,
-    marginTop: 8,
-  },
-  iconBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#F3F4F6",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  iconBtnText: { fontSize: 18 },
-
-  /* TRANSLATE BTN */
-  translateBtn: {
-    backgroundColor: "#1E2A6E",
-    borderRadius: 18,
-    paddingVertical: 18,
-    alignItems: "center",
-    flexDirection: "row",
-    justifyContent: "center",
-    gap: 10,
-    marginBottom: 24,
-    shadowColor: "#1E2A6E",
-    shadowOpacity: 0.35,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 6,
-  },
-  translateBtnIcon: { fontSize: 18, color: "#FFFFFF", fontWeight: "800" },
-  translateBtnText: { fontSize: 18, fontWeight: "800", color: "#FFFFFF" },
-
-  /* RESULT */
-  resultHeader: {
+  langSelectorRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: 10,
   },
-  resultLabel: {
-    fontSize: 12,
+  langPickerCol: {
+    flex: 1,
+  },
+  pickerLabel: {
+    fontSize: 10,
     fontWeight: "800",
-    color: "#1E2A6E",
-    letterSpacing: 1.2,
+    color: colors.textMuted,
+    letterSpacing: 0.8,
   },
-  resultActions: { flexDirection: "row", gap: 12 },
-  resultActionBtn: {},
-  resultActionText: { fontSize: 13, color: "#6B7280", fontWeight: "600" },
-  resultBox: {
-    backgroundColor: "#EEF2FF",
-    borderRadius: 18,
-    padding: 18,
-    minHeight: 130,
-    marginBottom: 28,
-    borderWidth: 1,
-    borderColor: "#C7D2FE",
+  pickerVal: {
+    ...typography.h3,
+    color: colors.white,
+    marginTop: 4,
   },
-  resultText: { fontSize: 18, color: "#111827", lineHeight: 30, marginBottom: 12 },
-  resultPlaceholder: { fontSize: 15, color: "#9CA3AF", fontStyle: "italic" },
-  verifiedBadge: {
-    flexDirection: "row",
+  swapBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: `${colors.primary}18`,
     alignItems: "center",
-    gap: 6,
-  },
-  verifiedIcon: { fontSize: 14, color: "#059669" },
-  verifiedText: { fontSize: 13, color: "#059669", fontWeight: "700" },
-  loaderContainer: {
     justifyContent: "center",
-    alignItems: "center",
-    minHeight: 90,
+    borderWidth: 1,
+    borderColor: colors.primaryBorder,
   },
-  loadingText: { marginTop: 10, fontSize: 14, color: "#6B7280" },
-
-  /* COMMON PHRASES */
-  phrasesTitle: {
-    fontSize: 22,
-    fontWeight: "800",
-    color: "#111827",
-    marginBottom: 14,
-  },
-  phrasesGrid: {
+  chipsRow: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 12,
+    gap: 8,
+    marginTop: 14,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
   },
-  phraseCard: {
-    width: "47%",
-    backgroundColor: "#EEF2FF",
-    borderRadius: 16,
+  chip: {
+    paddingVertical: 4,
+    paddingHorizontal: 12,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceElevated,
+  },
+  chipActive: {
+    backgroundColor: colors.primary,
+  },
+  chipText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontSize: 11,
+  },
+  chipTextActive: {
+    color: colors.background,
+    fontWeight: "800",
+  },
+  ioCard: {
+    padding: 16,
+    marginBottom: 14,
+  },
+  textInput: {
+    color: colors.textPrimary,
+    fontSize: 15,
+    textAlignVertical: "top",
+    minHeight: 80,
+  },
+  ioCardFooter: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    marginTop: 10,
+  },
+  translateBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.primary,
+    borderRadius: radius.pill,
+    paddingVertical: 8,
+    paddingHorizontal: 18,
+    gap: 6,
+  },
+  btnDisabled: {
+    opacity: 0.4,
+  },
+  translateBtnText: {
+    fontFamily: typography.button.fontFamily,
+    fontSize: 13,
+    fontWeight: "800",
+    color: colors.background,
+  },
+  outputCard: {
+    borderColor: colors.primaryBorder,
+  },
+  outputLabel: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: colors.primary,
+    letterSpacing: 0.8,
+    marginBottom: 8,
+  },
+  outputText: {
+    ...typography.h3,
+    fontSize: 18,
+    color: colors.white,
+    lineHeight: 26,
+  },
+  actionsRow: {
+    flexDirection: "row",
+    gap: 16,
+    marginTop: 16,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  actionIconBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  actionBtnText: {
+    ...typography.caption,
+    color: colors.primary,
+    fontWeight: "700",
+  },
+  sectionHeader: {
+    marginTop: 12,
+    marginBottom: 12,
+  },
+  phraseItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.surface,
+    borderRadius: radius.card,
     padding: 14,
+    marginBottom: 8,
     borderWidth: 1,
-    borderColor: "#C7D2FE",
+    borderColor: colors.border,
   },
   phraseCategory: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: "#4F46E5",
-    marginBottom: 6,
+    fontSize: 10,
+    fontWeight: "800",
+    color: colors.primary,
+    textTransform: "uppercase",
   },
   phraseText: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: "#111827",
-    lineHeight: 20,
+    ...typography.bodySm,
+    color: colors.textPrimary,
+    marginTop: 2,
   },
-
 });
-

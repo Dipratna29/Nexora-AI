@@ -5,85 +5,24 @@ import {
   TextInput,
   StyleSheet,
   TouchableOpacity,
-  FlatList,
   Alert,
-  Image,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
 } from "react-native";
-import * as Location from "expo-location";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { LinearGradient } from "expo-linear-gradient";
-import { Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import api from "../../config/api";
+import CosmicBackground from "../../components/common/CosmicBackground";
+import SurfaceCard from "../../components/common/SurfaceCard";
+import ScreenHeader from "../../components/common/ScreenHeader";
+import AppIcon from "../../components/common/AppIcon";
+import CustomBottomNav from "../../components/common/CustomBottomNav";
+import ActiveLocationBar from "../../components/common/ActiveLocationBar";
+import { useLocationContext } from "../../context/LocationContext";
+import { colors, typography, radius, shadows, spacing } from "../../theme";
 
-// ---------------------------------------------------------------------------
-// TrustTrip design tokens (from DESIGN.md)
-// ---------------------------------------------------------------------------
-const colors = {
-  surface: "#f8f9ff",
-  surfaceContainerLowest: "#ffffff",
-  surfaceContainerLow: "#eff4ff",
-  surfaceContainer: "#e5eeff",
-  surfaceContainerHigh: "#dce9ff",
-  onSurface: "#0b1c30",
-  onSurfaceVariant: "#444651",
-  outlineVariant: "#c5c5d3",
-  primary: "#00236f",
-  onPrimary: "#ffffff",
-  primaryContainer: "#1e3a8a",
-  secondary: "#006c49",
-  secondaryContainer: "#6cf8bb",
-  onSecondaryContainer: "#00714d",
-  error: "#ba1a1a",
-  onError: "#ffffff",
-  errorContainer: "#ffdad6",
-  onErrorContainer: "#93000a",
-};
-
-const typography = {
-  headlineLg: { fontFamily: "Inter", fontSize: 26, fontWeight: "700" as const, letterSpacing: -0.3 },
-  headlineMd: { fontFamily: "Inter", fontSize: 20, fontWeight: "700" as const, letterSpacing: -0.1 },
-  bodyMd: { fontFamily: "Inter", fontSize: 14, fontWeight: "400" as const, lineHeight: 21 },
-  labelMd: { fontFamily: "Inter", fontSize: 14, fontWeight: "700" as const },
-  labelSm: { fontFamily: "Inter", fontSize: 11, fontWeight: "700" as const, letterSpacing: 0.4 },
-};
-
-const spacing = { base: 4, xs: 8, sm: 16, md: 24, lg: 40, marginMobile: 20 };
-const radius = { sm: 4, DEFAULT: 8, md: 12, lg: 16, xl: 24, full: 9999 };
-
-const ambientShadow = {
-  shadowColor: colors.primary,
-  shadowOffset: { width: 0, height: 8 },
-  shadowOpacity: 0.08,
-  shadowRadius: 20,
-  elevation: 4,
-};
-
-const TABS: { key: string; label: string; icon: keyof typeof Ionicons.glyphMap; screen: string }[] = [
-  { key: "Home", label: "Home", icon: "home-outline", screen: "Home" },
-  { key: "Explore", label: "Explore", icon: "compass-outline", screen: "Guide" },
-  { key: "Reports", label: "Reports", icon: "shield-outline", screen: "MyComplaints" },
-  { key: "Profile", label: "Profile", icon: "person-outline", screen: "Profile" },
-];
-
-// Presentation-only: maps each fixed category string to an icon. Values
-// match `categories` below exactly — does not affect selection/submit logic.
-const CATEGORY_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
-  Overpricing: "pricetag-outline",
-  "Women Safety": "female-outline",
-  "No Washroom": "body-outline",
-  "Language Problem": "language-outline",
-  "Overcrowded Area": "people-outline",
-  "Police Issue": "shield-outline",
-  "Dirty Area": "trash-outline",
-  "Fake Products": "alert-circle-outline",
-  Other: "ellipsis-horizontal-outline",
-};
-
-const categories = [
+const CATEGORIES = [
   "Overpricing",
   "Women Safety",
   "No Washroom",
@@ -97,35 +36,43 @@ const categories = [
 
 export default function ComplaintScreen() {
   const navigation = useNavigation<any>();
-
-  // --- Backend logic (unchanged) --------------------------------------------
   const [selectedCategory, setSelectedCategory] = useState("");
   const [complaint, setComplaint] = useState("");
-  const [location, setLocation] = useState<any>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [acquiringLoc, setAcquiringLoc] = useState(false);
+  const { activeLocation, isManual, detectGpsLocation, showFallback } = useLocationContext();
 
-  const getLocation = async () => {
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== "granted") {
-      Alert.alert("Permission Denied");
-      return;
+  const handleAttachLocation = async () => {
+    if (activeLocation) {
+      return; // Already attached
     }
-
-    const loc = await Location.getCurrentPositionAsync({});
-    setLocation(loc.coords);
+    setAcquiringLoc(true);
+    try {
+      const success = await detectGpsLocation(true, false);
+      if (!success) {
+        showFallback('unavailable');
+      }
+    } finally {
+      setAcquiringLoc(false);
+    }
   };
 
   const handleSubmit = async () => {
     if (!selectedCategory) {
-      Alert.alert("Please select a complaint category.");
+      Alert.alert("Required Category", "Please select a complaint category.");
       return;
     }
 
-    try {
-      // GET LOGGED IN USER
-      const user = await AsyncStorage.getItem("user");
+    if (!complaint.trim()) {
+      Alert.alert("Required Description", "Please describe the issue in detail.");
+      return;
+    }
 
+    setSubmitting(true);
+    try {
+      const user = await AsyncStorage.getItem("user");
       if (!user) {
-        Alert.alert("Error", "User not logged in");
+        Alert.alert("Session Error", "Please sign in to submit a complaint.");
         return;
       }
 
@@ -135,24 +82,25 @@ export default function ComplaintScreen() {
       const response = await api.post("/complaint", {
         username: username,
         category: selectedCategory,
-        description: complaint,
-        latitude: location?.latitude || null,
-        longitude: location?.longitude || null,
+        description: complaint.trim(),
+        latitude: activeLocation?.latitude || null,
+        longitude: activeLocation?.longitude || null,
+        location_name: activeLocation?.name || null,
       });
 
-      const data = response.data;
-
       if (response.status >= 200 && response.status < 300) {
-        Alert.alert("Success", data.message);
-
+        Alert.alert("Report Filed", "Your complaint has been submitted successfully to local authorities.", [
+          { text: "View Reports", onPress: () => navigation.navigate("MyComplaints") },
+        ]);
         setComplaint("");
         setSelectedCategory("");
-        setLocation(null);
       } else {
-        Alert.alert("Error", data.message);
+        Alert.alert("Submission Issue", response.data?.message || "Could not submit report.");
       }
-    } catch (error) {
-      Alert.alert("Error", "Could not submit complaint");
+    } catch {
+      Alert.alert("Error", "Could not submit complaint. Please check your network connection.");
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -160,368 +108,236 @@ export default function ComplaintScreen() {
     if (selectedCategory === "Overpricing")
       return "Tip: Check verified shop list in Local Guide section.";
     if (selectedCategory === "Women Safety")
-      return "Tip: Use SOS button for immediate help.";
+      return "Tip: Use the SOS button for immediate responder dispatch.";
     if (selectedCategory === "No Washroom")
-      return "Tip: Check nearby washrooms in Facilities section.";
+      return "Tip: Check nearby amenities in the Women Safety section.";
     if (selectedCategory === "Language Problem")
-      return "Tip: Use in-app Translator feature.";
+      return "Tip: Use the in-app AI Translator tool.";
     if (selectedCategory === "Overcrowded Area")
-      return "Tip: Take a Guidence of local guides.";
+      return "Tip: Check the Crowd Density Radar for alternate routes.";
     if (selectedCategory === "Police Issue")
-      return "Tip: Use SOS button for immediate help.";
+      return "Tip: Use SOS button for emergency authority dispatch.";
     if (selectedCategory === "Dirty Area")
-      return "Tip: Ask local guides for recommendations.";
+      return "Tip: Environmental reports are forwarded to tourism sanitation teams.";
     if (selectedCategory === "Fake Products")
-      return "Tip: Check verified shop list in Local Guide section.";
-    else if (selectedCategory === "Other")
-      return "Tip: Provide as much detail as possible in the description.";
-    return "";
+      return "Tip: Report merchant details for regulatory inspection.";
+    if (selectedCategory === "Other")
+      return "Tip: Please provide specific landmark & time details.";
+    return null;
   };
-  // --- End backend logic -----------------------------------------------------
+
+  const tip = getSuggestion();
 
   return (
-  <KeyboardAvoidingView
-    style={{ flex: 1 }}
-    behavior={Platform.OS === "ios" ? "padding" : "height"}
-  >
-    <View style={styles.screen}>
+    <CosmicBackground>
+      <ScreenHeader
+        title="Report an Issue"
+        subtitle="Submit complaints to safety authorities"
+        showBack
+        onBack={() => navigation.goBack()}
+        rightAction={
+          <TouchableOpacity
+            style={styles.myReportsBtn}
+            onPress={() => navigation.navigate("MyComplaints")}
+          >
+            <Text style={styles.myReportsBtnText}>My Reports</Text>
+          </TouchableOpacity>
+        }
+      />
 
-      {/* HERO - Fixed */}
-      <LinearGradient
-        colors={[colors.primary, colors.primaryContainer]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.headerCard}
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
       >
-        <Text style={styles.headerTitle}>Submit Report</Text>
-
-        <Text style={styles.headerSubtitle}>
-          Your feedback helps us keep the community safe and improve travel
-          experiences for everyone.
-        </Text>
-
-        <Ionicons
-          name="shield-outline"
-          size={90}
-          color="rgba(255,255,255,0.08)"
-          style={styles.heroWatermark}
-        />
-      </LinearGradient>
-
-      {/* Scrollable Content */}
-      <ScrollView
-        keyboardShouldPersistTaps="handled"
-        contentContainerStyle={styles.container}
-        showsVerticalScrollIndicator={false}
-      >
-        <View style={styles.dragHandle} />
-
-        {/* Category */}
-        <Text style={styles.sectionTitle}>
-          Issue Category
-        </Text>
-
-        <FlatList
-          data={categories}
-          numColumns={2}
-          scrollEnabled={false}
-          keyExtractor={(item) => item}
-          columnWrapperStyle={{
-            justifyContent: "space-between",
-          }}
-          renderItem={({ item }) => {
-            const selected = selectedCategory === item;
-
-            return (
-              <TouchableOpacity
-                style={[
-                  styles.categoryCard,
-                  selected && styles.selectedCard,
-                ]}
-                onPress={() => setSelectedCategory(item)}
-                activeOpacity={0.8}
-              >
-                <Ionicons
-                  name={
-                    CATEGORY_ICONS[item] ??
-                    "ellipse-outline"
-                  }
-                  size={22}
-                  color={
-                    selected
-                      ? colors.onPrimary
-                      : colors.primary
-                  }
-                  style={{ marginBottom: spacing.xs }}
-                />
-
-                <Text
-                  style={[
-                    styles.categoryText,
-                    selected &&
-                      styles.categoryTextSelected,
-                  ]}
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.scrollContent}
+        >
+          {/* CATEGORY SELECTION */}
+          <Text style={styles.sectionTitle}>SELECT ISSUE CATEGORY</Text>
+          <View style={styles.categoryGrid}>
+            {CATEGORIES.map((cat) => {
+              const isSelected = selectedCategory === cat;
+              return (
+                <TouchableOpacity
+                  key={cat}
+                  style={[styles.categoryChip, isSelected && styles.categoryChipSelected]}
+                  onPress={() => setSelectedCategory(cat)}
+                  activeOpacity={0.8}
                 >
-                  {item}
-                </Text>
-              </TouchableOpacity>
-            );
-            }}
-          />
-
-          {/* Smart Suggestion */}
-          {selectedCategory !== "" && <Text style={styles.suggestion}>{getSuggestion()}</Text>}
-
-          {/* Description */}
-          <Text style={styles.sectionTitle}>Description</Text>
-
-          <TextInput
-            placeholder="Describe the issue in detail. What happened? Where exactly did it occur?"
-            placeholderTextColor={colors.onSurfaceVariant}
-            style={styles.input}
-            multiline
-            value={complaint}
-            onChangeText={setComplaint}
-          />
-
-          {/* Location Button */}
-          <TouchableOpacity style={styles.locationBtn} onPress={getLocation} activeOpacity={0.85}>
-            <Ionicons
-              name={location ? "checkmark-circle-outline" : "locate-outline"}
-              size={18}
-              color={colors.primary}
-            />
-            <Text style={styles.locationBtnText}>
-              {location ? "Location Added ✓" : "Add My Location"}
-            </Text>
-          </TouchableOpacity>
-
-          {/* Submit Button */}
-          <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit} activeOpacity={0.9}>
-            <Text style={styles.submitBtnText}>Submit Complaint</Text>
-          </TouchableOpacity>
-
-          {/* NEED IMMEDIATE HELP */}
-          <View style={styles.sosCard}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.sosTitle}>NEED IMMEDIATE HELP?</Text>
-              <Text style={styles.sosText}>
-                If you are in danger, please use the Emergency SOS button immediately.
-              </Text>
-            </View>
-
-            <TouchableOpacity
-              style={styles.sosButton}
-              onPress={() => navigation.navigate("SOS")}
-              activeOpacity={0.85}
-            >
-              <Text style={styles.sosButtonText}>SOS</Text>
-            </TouchableOpacity>
+                  <Text style={[styles.categoryText, isSelected && styles.categoryTextSelected]}>
+                    {cat}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
 
-          <View style={{ height: spacing.lg }} />
-        </ScrollView>
+          {/* AI / GUARDIAN TIP */}
+          {tip && (
+            <SurfaceCard style={styles.tipCard}>
+              <View style={styles.tipRow}>
+                <AppIcon name="sparkles" size={18} color={colors.cream} />
+                <Text style={styles.tipText}>{tip}</Text>
+              </View>
+            </SurfaceCard>
+          )}
 
-     
-      </View>
-    </KeyboardAvoidingView>
+          {/* DESCRIPTION INPUT */}
+          <Text style={styles.sectionTitle}>INCIDENT DETAILS</Text>
+          <SurfaceCard style={styles.inputCard}>
+            <TextInput
+              style={styles.textArea}
+              multiline
+              numberOfLines={5}
+              placeholder="Describe what happened, merchant or vehicle details, landmarks..."
+              placeholderTextColor={colors.textMuted}
+              value={complaint}
+              onChangeText={setComplaint}
+            />
+          </SurfaceCard>
+
+          {/* ACTIVE LOCATION FOR COMPLAINT */}
+          <Text style={styles.sectionTitle}>INCIDENT LOCATION</Text>
+          <ActiveLocationBar style={{ marginBottom: 12 }} />
+
+          {/* SUBMIT BUTTON */}
+          <TouchableOpacity
+            style={[styles.submitBtn, submitting && styles.btnDisabled]}
+            onPress={handleSubmit}
+            disabled={submitting}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.submitBtnText}>
+              {submitting ? "Submitting Report..." : "Submit Incident Report"}
+            </Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </KeyboardAvoidingView>
+
+      {/* BOTTOM NAV */}
+      <CustomBottomNav activeTab="MyComplaints" navigation={navigation} />
+    </CosmicBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: colors.surface,
+  myReportsBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: radius.pill,
+    backgroundColor: `${colors.primary}18`,
   },
-
-  // --- Content --------------------------------------------------------------
-  container: {
-    paddingBottom: spacing.md,
+  myReportsBtnText: {
+    ...typography.caption,
+    color: colors.primary,
+    fontWeight: "700",
   },
-
-  // --- Hero ------------------------------------------------------------------
-  headerCard: {
-    paddingHorizontal: spacing.marginMobile,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.lg,
-    borderBottomLeftRadius: radius.xl + spacing.sm,
-    borderBottomRightRadius: radius.xl + spacing.sm,
-    overflow: "hidden",
+  scrollContent: {
+    paddingHorizontal: spacing.screenPadding,
+    paddingTop: 12,
+    paddingBottom: 32,
   },
-
-  headerTitle: {
-    ...typography.headlineLg,
-    color: colors.onPrimary,
-  },
-
-  headerSubtitle: {
-    ...typography.bodyMd,
-    color: "#c7d5ff",
-    marginTop: spacing.xs,
-    maxWidth: "85%",
-  },
-
-  heroWatermark: {
-    position: "absolute",
-    right: -10,
-    bottom: -10,
-  },
-
-  dragHandle: {
-    alignSelf: "center",
-    width: 40,
-    height: 4,
-    borderRadius: radius.full,
-    backgroundColor: colors.surfaceContainerHigh,
-    marginTop: -radius.xl - spacing.xs,
-    marginBottom: spacing.md,
-  },
-
-  // --- Sections ----------------------------------------------------------------
   sectionTitle: {
-    ...typography.headlineMd,
-    fontSize: 19,
-    color: colors.onSurface,
-    marginHorizontal: spacing.marginMobile,
-    marginBottom: spacing.sm,
+    fontSize: 10,
+    fontWeight: "800",
+    color: colors.primary,
+    letterSpacing: 0.8,
+    marginBottom: 10,
+    marginTop: 8,
   },
-
-  // --- Category grid ---------------------------------------------------------------
-  categoryCard: {
-    width: "46%",
-    marginHorizontal: "2%",
-    backgroundColor: colors.surfaceContainerLow,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.lg,
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: spacing.xs,
+  categoryGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginBottom: 16,
   },
-
-  selectedCard: {
-    backgroundColor: colors.primary,
-  },
-
-  categoryText: {
-    ...typography.labelMd,
-    fontSize: 13,
-    color: colors.onSurface,
-    textAlign: "center",
-  },
-
-  categoryTextSelected: {
-    color: colors.onPrimary,
-  },
-
-  // --- Suggestion -----------------------------------------------------------------
-  suggestion: {
-    backgroundColor: colors.secondaryContainer,
-    borderLeftWidth: 4,
-    borderLeftColor: colors.secondary,
-    padding: spacing.sm,
-    borderRadius: radius.md,
-    marginHorizontal: spacing.marginMobile,
-    marginTop: spacing.xs,
-    marginBottom: spacing.md,
-    color: colors.onSecondaryContainer,
-    fontSize: 14,
-    lineHeight: 21,
-    fontWeight: "500",
-  },
-
-  // --- Description input ---------------------------------------------------------
-  input: {
-    backgroundColor: colors.surfaceContainerLowest,
+  categoryChip: {
+    backgroundColor: colors.surface,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: radius.pill,
     borderWidth: 1,
-    borderColor: colors.outlineVariant,
-    borderRadius: radius.lg,
-    padding: spacing.sm,
-    height: 130,
-    textAlignVertical: "top",
-    fontSize: 15,
-    color: colors.onSurface,
-    marginHorizontal: spacing.marginMobile,
-    marginBottom: spacing.sm,
+    borderColor: colors.border,
   },
-
-  // --- Location button ---------------------------------------------------------------
+  categoryChipSelected: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  categoryText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: "600",
+  },
+  categoryTextSelected: {
+    color: colors.background,
+    fontWeight: "800",
+  },
+  tipCard: {
+    padding: 12,
+    marginBottom: 16,
+    borderColor: "rgba(251, 226, 180, 0.25)",
+  },
+  tipRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  tipText: {
+    ...typography.caption,
+    color: colors.cream,
+    flex: 1,
+    lineHeight: 18,
+  },
+  inputCard: {
+    padding: 14,
+    marginBottom: 16,
+  },
+  textArea: {
+    color: colors.textPrimary,
+    fontSize: 14,
+    textAlignVertical: "top",
+    minHeight: 110,
+  },
   locationBtn: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: spacing.xs,
-    backgroundColor: colors.surfaceContainerHigh,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.lg,
-    marginHorizontal: spacing.marginMobile,
-    marginBottom: spacing.sm,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.primaryBorder,
+    borderRadius: radius.button,
+    paddingVertical: 12,
+    gap: 8,
+    marginBottom: 20,
   },
-
+  locationBtnAttached: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
   locationBtnText: {
-    ...typography.labelMd,
-    fontSize: 15,
+    ...typography.caption,
     color: colors.primary,
+    fontWeight: "700",
   },
-
-  // --- Submit button ---------------------------------------------------------------
+  locationBtnTextAttached: {
+    color: colors.background,
+  },
   submitBtn: {
     backgroundColor: colors.primary,
-    paddingVertical: spacing.sm + spacing.base,
-    borderRadius: radius.lg,
+    borderRadius: radius.button,
+    paddingVertical: 15,
     alignItems: "center",
     justifyContent: "center",
-    marginHorizontal: spacing.marginMobile,
-    marginBottom: spacing.md,
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
-    elevation: 6,
+    ...shadows.glowPrimary,
   },
-
+  btnDisabled: {
+    opacity: 0.65,
+  },
   submitBtnText: {
-    ...typography.headlineMd,
-    fontSize: 17,
-    color: colors.onPrimary,
+    fontFamily: typography.button.fontFamily,
+    fontSize: 16,
+    fontWeight: "800",
+    color: colors.background,
   },
-
-  // --- SOS card ------------------------------------------------------------------
-  sosCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: colors.errorContainer,
-    borderRadius: radius.xl,
-    padding: spacing.md,
-    marginHorizontal: spacing.marginMobile,
-  },
-
-  sosTitle: {
-    ...typography.labelSm,
-    fontSize: 12,
-    color: colors.error,
-    marginBottom: spacing.base,
-  },
-
-  sosText: {
-    ...typography.bodyMd,
-    fontSize: 13,
-    color: colors.onErrorContainer,
-  },
-
-  sosButton: {
-    width: 52,
-    height: 52,
-    borderRadius: radius.full,
-    backgroundColor: colors.error,
-    alignItems: "center",
-    justifyContent: "center",
-    marginLeft: spacing.sm,
-  },
-
-  sosButtonText: {
-    ...typography.labelSm,
-    fontSize: 12,
-    color: colors.onError,
-  },
-
 });

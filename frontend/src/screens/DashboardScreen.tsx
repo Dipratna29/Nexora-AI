@@ -3,37 +3,31 @@ import {
   View,
   Text,
   StyleSheet,
-  SafeAreaView,
   TouchableOpacity,
-  FlatList,
-  Alert,
   ScrollView,
+  RefreshControl,
+  Dimensions,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useNavigation } from "@react-navigation/native";
 import api from "../config/api";
+import CosmicBackground from "../components/common/CosmicBackground";
+import SurfaceCard from "../components/common/SurfaceCard";
+import ScreenHeader from "../components/common/ScreenHeader";
+import AppIcon from "../components/common/AppIcon";
+import { StatusBadge } from "../components/common/StatusIndicator";
+import CustomBottomNav from "../components/common/CustomBottomNav";
+import { colors, typography, radius, spacing } from "../theme";
 
 type Complaint = { id: number; category: string; status?: string; created_at: string };
 type GuideShort = { g_id: number; name: string; rating: number; status: string };
 type Order = { id: number; name: string; total_price: number; status: string };
 
-// ---- Design tokens (kept local so no other files need to change) ----
-const COLORS = {
-  bg: "#EEF3FC",
-  card: "#FFFFFF",
-  primary: "#1E4FD6",
-  primaryDark: "#0B1C30",
-  teal: "#0F5E6B",
-  red: "#D6303F",
-  redBg: "#FCE9EA",
-  textMuted: "#6B7280",
-  border: "#EEF1F6",
-};
-
 export default function DashboardScreen() {
   const [complaints, setComplaints] = useState<Complaint[]>([]);
   const [bookedGuides, setBookedGuides] = useState<GuideShort[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [loading, setLoading] = useState(false);
   const navigation = useNavigation<any>();
 
   useEffect(() => {
@@ -41,39 +35,44 @@ export default function DashboardScreen() {
   }, []);
 
   const loadAll = async () => {
+    setLoading(true);
     try {
       const userRaw = await AsyncStorage.getItem("user");
-      if (!userRaw) return;
+      if (!userRaw) {
+        setLoading(false);
+        return;
+      }
       const user = JSON.parse(userRaw);
       const username = user.username;
       const user_id = user.id;
 
-      // Parallel requests — UNCHANGED
       const [complaintsRes, guidesRes, ordersRes] = await Promise.all([
-        api.get(`/user-complaints/${username}`),
-        api.get(`/guides`, { params: { username } }),
-        api.get(`/user-orders/${user_id}`),
+        api.get(`/user-complaints/${username}`).catch(() => ({ data: [] })),
+        api.get(`/guides`, { params: { username } }).catch(() => ({ data: [] })),
+        api.get(`/user-orders/${user_id}`).catch(() => ({ data: [] })),
       ]);
 
       setComplaints(Array.isArray(complaintsRes.data) ? complaintsRes.data : []);
 
       const allGuides = Array.isArray(guidesRes.data) ? guidesRes.data : [];
-      const booked = allGuides.filter((g: any) => g.booked_by_user).map((g: any) => ({
-        g_id: g.g_id,
-        name: g.name,
-        rating: Number(g.rating || 0),
-        status: g.status,
-      }));
+      const booked = allGuides
+        .filter((g: any) => g.booked_by_user)
+        .map((g: any) => ({
+          g_id: g.g_id,
+          name: g.name,
+          rating: Number(g.rating || 0),
+          status: g.status || "CONFIRMED",
+        }));
       setBookedGuides(booked);
 
       setOrders(Array.isArray(ordersRes.data) ? ordersRes.data : []);
-    } catch (err) {
-      console.log(err);
-      Alert.alert("Error", "Failed to load dashboard data");
+    } catch {
+      // Graceful fallback
+    } finally {
+      setLoading(false);
     }
   };
 
-  // ---- Derived analytics from existing complaints data (no backend change) ----
   const analytics = useMemo(() => {
     const total = complaints.length;
     const norm = (s?: string) => (s || "pending").toLowerCase();
@@ -83,382 +82,304 @@ export default function DashboardScreen() {
     const pct = (n: number) => (total > 0 ? Math.round((n / total) * 100) : 0);
     return {
       total,
+      resolved,
+      pending,
+      rejected,
       resolvedPct: pct(resolved),
       pendingPct: pct(pending),
-      rejectedPct: pct(rejected),
       criticalCount: complaints.filter((c) => norm(c.status).includes("critical")).length,
     };
   }, [complaints]);
 
-  const recentActivity = useMemo(() => {
-    // Merge the three data sources into one lightweight feed, newest-first-ish
-    const items: { id: string; label: string; meta: string; tone: "blue" | "purple" | "red" | "gray" }[] = [];
-    complaints.slice(0, 2).forEach((c) =>
-      items.push({
-        id: `c-${c.id}`,
-        label: `Complaint #${c.id} — ${c.status || "Pending"}`,
-        meta: c.category,
-        tone: (c.status || "").toLowerCase().includes("resolved") ? "blue" : "gray",
-      })
-    );
-    bookedGuides.slice(0, 1).forEach((g) =>
-      items.push({ id: `g-${g.g_id}`, label: `Guide booked — ${g.name}`, meta: g.status, tone: "purple" })
-    );
-    orders.slice(0, 1).forEach((o) =>
-      items.push({ id: `o-${o.id}`, label: `Order #${o.id} — ${o.status}`, meta: o.name, tone: "gray" })
-    );
-    return items;
-  }, [complaints, bookedGuides, orders]);
-
-  // Order Insights bar data — Order type has no per-day breakdown, so this is
-  // presentational placeholder data per the design spec. Wire to a real
-  // `/order-insights` endpoint later without touching this component's shape.
-  const weekBars = [40, 55, 70, 48, 82, 95, 60];
-  const weekLabels = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
-  const peakIndex = weekBars.indexOf(Math.max(...weekBars));
-  const deliveredCount = orders.filter((o) => o.status?.toLowerCase() === "delivered").length;
-  const cancelledCount = orders.filter((o) => o.status?.toLowerCase() === "cancelled").length;
-
-  const renderComplaint = ({ item }: { item: Complaint }) => (
-    <View style={styles.listItem}>
-      <Text style={styles.itemTitle}>{item.category}</Text>
-      <Text style={styles.itemMeta}>{item.status || "Pending"}</Text>
-    </View>
-  );
-
-  const renderGuide = ({ item }: { item: GuideShort }) => (
-    <TouchableOpacity style={styles.listItem} onPress={() => navigation.navigate("Guide")}>
-      <Text style={styles.itemTitle}>{item.name}</Text>
-      <Text style={styles.itemMeta}>⭐ {item.rating.toFixed(1)} • {item.status}</Text>
-    </TouchableOpacity>
-  );
-
-  const renderOrder = ({ item }: { item: Order }) => (
-    <TouchableOpacity style={styles.listItem} onPress={() => navigation.navigate("MyOrders")}>
-      <Text style={styles.itemTitle}>{item.name}</Text>
-      <Text style={styles.itemMeta}>₹{Number(item.total_price).toLocaleString()} • {item.status}</Text>
-    </TouchableOpacity>
-  );
-
   return (
-    <SafeAreaView style={styles.safe}>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
-        <View style={styles.header}>
-          <Text style={styles.title}>Dashboard</Text>
-          <TouchableOpacity onPress={loadAll} style={styles.refreshBtn}>
-            <Text style={styles.refreshText}>Refresh</Text>
+    <CosmicBackground>
+      <ScreenHeader
+        title="Activity & Explorer"
+        subtitle="Traveler records, gear & safety history"
+        rightAction={
+          <TouchableOpacity onPress={loadAll} style={styles.headerRefreshBtn}>
+            <AppIcon name="refresh" size={18} color={colors.primary} />
+          </TouchableOpacity>
+        }
+      />
+
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={loading}
+            onRefresh={loadAll}
+            tintColor={colors.primary}
+            colors={[colors.primary]}
+          />
+        }
+      >
+        {/* OVERVIEW METRIC TILES */}
+        <View style={styles.overviewGrid}>
+          <SurfaceCard style={styles.metricCard} onPress={() => navigation.navigate("MyComplaints")}>
+            <View style={[styles.metricIconWrap, { backgroundColor: `${colors.primary}18` }]}>
+              <AppIcon name="document-text-outline" size={20} color={colors.primary} />
+            </View>
+            <Text style={styles.metricLabel}>Complaints</Text>
+            <Text style={styles.metricValue}>{complaints.length}</Text>
+          </SurfaceCard>
+
+          <SurfaceCard style={styles.metricCard} onPress={() => navigation.navigate("MyOrders")}>
+            <View style={[styles.metricIconWrap, { backgroundColor: `${colors.cream}18` }]}>
+              <AppIcon name="cube-outline" size={20} color={colors.cream} />
+            </View>
+            <Text style={styles.metricLabel}>Gear Orders</Text>
+            <Text style={[styles.metricValue, { color: colors.cream }]}>{orders.length}</Text>
+          </SurfaceCard>
+
+          <SurfaceCard style={styles.metricCard} onPress={() => navigation.navigate("Guide")}>
+            <View style={[styles.metricIconWrap, { backgroundColor: `${colors.primary}18` }]}>
+              <AppIcon name="compass-outline" size={20} color={colors.primary} />
+            </View>
+            <Text style={styles.metricLabel}>Guides</Text>
+            <Text style={styles.metricValue}>{bookedGuides.length}</Text>
+          </SurfaceCard>
+        </View>
+
+        {/* COMPLAINT RESOLUTION CARD */}
+        <SurfaceCard style={styles.sectionCard} variant="elevated">
+          <View style={styles.cardHeaderRow}>
+            <View>
+              <Text style={typography.h4}>Resolution Performance</Text>
+              <Text style={styles.cardHeaderSub}>Monthly complaint resolution rate</Text>
+            </View>
+            <StatusBadge
+              label={`${analytics.resolvedPct}% Done`}
+              status={analytics.resolvedPct > 50 ? "ready" : "moderate"}
+            />
+          </View>
+
+          {/* PROGRESS BARS */}
+          <View style={styles.progressSection}>
+            <View style={styles.progressRow}>
+              <View style={styles.progressLabelCol}>
+                <Text style={styles.progressName}>Resolved</Text>
+                <Text style={styles.progressCount}>{analytics.resolved} of {analytics.total}</Text>
+              </View>
+              <View style={styles.progressBarBg}>
+                <View style={[styles.progressBarFill, { width: `${analytics.resolvedPct}%`, backgroundColor: colors.primary }]} />
+              </View>
+            </View>
+
+            <View style={styles.progressRow}>
+              <View style={styles.progressLabelCol}>
+                <Text style={styles.progressName}>In Progress / Pending</Text>
+                <Text style={styles.progressCount}>{analytics.pending} of {analytics.total}</Text>
+              </View>
+              <View style={styles.progressBarBg}>
+                <View style={[styles.progressBarFill, { width: `${analytics.pendingPct}%`, backgroundColor: colors.cream }]} />
+              </View>
+            </View>
+          </View>
+        </SurfaceCard>
+
+        {/* RECENT ORDERS */}
+        <View style={styles.sectionHeader}>
+          <Text style={typography.h3}>Recent Equipment Orders</Text>
+          <TouchableOpacity onPress={() => navigation.navigate("MyOrders")}>
+            <Text style={styles.viewAllLink}>View All</Text>
           </TouchableOpacity>
         </View>
 
-        {/* SOS Alert Banner */}
-        {analytics.criticalCount > 0 && (
-          <View style={styles.sosBanner}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.sosTitle}>Active SOS Alerts</Text>
-              <Text style={styles.sosSubtitle}>
-                {analytics.criticalCount} critical incident{analytics.criticalCount > 1 ? "s" : ""} requiring
-                immediate attention
-              </Text>
-            </View>
-            <TouchableOpacity style={styles.sosBtn} onPress={() => navigation.navigate("MyComplaints")}>
-              <Text style={styles.sosBtnText}>Respond Now</Text>
-            </TouchableOpacity>
-          </View>
+        {orders.length === 0 ? (
+          <SurfaceCard style={styles.emptyCard}>
+            <AppIcon name="cube-outline" size={24} color={colors.textMuted} />
+            <Text style={styles.emptyText}>No equipment orders yet</Text>
+          </SurfaceCard>
+        ) : (
+          orders.slice(0, 3).map((item) => (
+            <SurfaceCard key={item.id} style={styles.orderItemCard} onPress={() => navigation.navigate("MyOrders")}>
+              <View style={styles.orderIconWrap}>
+                <AppIcon name="cube" size={20} color={colors.primary} />
+              </View>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={typography.h4}>{item.name}</Text>
+                <Text style={styles.itemMeta}>Total: ₹{Number(item.total_price).toFixed(2)}</Text>
+              </View>
+              <StatusBadge
+                label={item.status || "PAID"}
+                status={item.status === "PAID" ? "ready" : "moderate"}
+              />
+            </SurfaceCard>
+          ))
         )}
 
-        {/* Summary cards */}
-        <View style={styles.summaryRow}>
-          <TouchableOpacity style={styles.summaryCard} onPress={() => navigation.navigate("MyComplaints")}>
-            <Text style={styles.summaryLabelTop}>COMPLAINTS</Text>
-            <Text style={styles.summaryNum}>{complaints.length}</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.summaryCard} onPress={() => navigation.navigate("MyComplaints")}>
-            <Text style={styles.summaryLabelTop}>PENDING</Text>
-            <Text style={styles.summaryNum}>{analytics.pendingPct > 0 ? complaints.length - (complaints.length - Math.round((analytics.pendingPct / 100) * complaints.length)) : 0}</Text>
+        {/* RECENT COMPLAINTS */}
+        <View style={styles.sectionHeader}>
+          <Text style={typography.h3}>Recent Reports</Text>
+          <TouchableOpacity onPress={() => navigation.navigate("MyComplaints")}>
+            <Text style={styles.viewAllLink}>View All</Text>
           </TouchableOpacity>
         </View>
 
-        {/* Report Analytics donut (View-based, no svg dependency) */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Report Analytics</Text>
-          <Text style={styles.cardSubtitle}>Monthly resolution performance</Text>
-
-          <View style={styles.donutRow}>
-            <View style={styles.donutOuter}>
-              <View style={styles.donutInner}>
-                <Text style={styles.donutTotal}>{analytics.total}</Text>
-                <Text style={styles.donutTotalLabel}>TOTAL</Text>
+        {complaints.length === 0 ? (
+          <SurfaceCard style={styles.emptyCard}>
+            <AppIcon name="document-text-outline" size={24} color={colors.textMuted} />
+            <Text style={styles.emptyText}>No reports filed</Text>
+          </SurfaceCard>
+        ) : (
+          complaints.slice(0, 3).map((item) => (
+            <SurfaceCard key={item.id} style={styles.orderItemCard} onPress={() => navigation.navigate("MyComplaints")}>
+              <View style={styles.complaintIconWrap}>
+                <AppIcon name="chatbubble-ellipses-outline" size={20} color={colors.cream} />
               </View>
-            </View>
-          </View>
-
-          <LegendRow color={COLORS.primary} label="Resolved" pct={analytics.resolvedPct} />
-          <LegendRow color={COLORS.teal} label="Pending" pct={analytics.pendingPct} />
-          <LegendRow color={COLORS.red} label="Rejected" pct={analytics.rejectedPct} />
-        </View>
-
-        {/* Recent Activity feed */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Recent Activity</Text>
-          {recentActivity.length === 0 ? (
-            <Text style={styles.empty}>No recent activity</Text>
-          ) : (
-            recentActivity.map((item) => (
-              <View key={item.id} style={styles.activityRow}>
-                <View style={[styles.activityDot, { backgroundColor: toneColor(item.tone) }]} />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.itemTitle}>{item.label}</Text>
-                  <Text style={styles.itemMeta}>{item.meta}</Text>
-                </View>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={typography.h4}>{item.category}</Text>
+                <Text style={styles.itemMeta}>Report #{item.id}</Text>
               </View>
-            ))
-          )}
-        </View>
-
-        {/* Original Recent Reports list — kept intact, just restyled via `card` */}
-        <View style={styles.card}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.cardTitle}>Recent Reports</Text>
-            <TouchableOpacity onPress={() => navigation.navigate("MyComplaints")}>
-              <Text style={styles.link}>View All</Text>
-            </TouchableOpacity>
-          </View>
-          <FlatList
-            data={complaints.slice(0, 3)}
-            keyExtractor={(i) => String(i.id)}
-            renderItem={renderComplaint}
-            scrollEnabled={false}
-            ListEmptyComponent={<Text style={styles.empty}>No reports</Text>}
-          />
-        </View>
-
-        <View style={styles.card}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.cardTitle}>Booked Guides</Text>
-            <TouchableOpacity onPress={() => navigation.navigate("Guide")}>
-              <Text style={styles.link}>Manage</Text>
-            </TouchableOpacity>
-          </View>
-          <FlatList
-            data={bookedGuides.slice(0, 3)}
-            keyExtractor={(i) => String(i.g_id)}
-            renderItem={renderGuide}
-            scrollEnabled={false}
-            ListEmptyComponent={<Text style={styles.empty}>No booked guides</Text>}
-          />
-        </View>
-
-        {/* Order Insights */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Order Insights</Text>
-          <Text style={styles.cardSubtitle}>Growth and status distribution</Text>
-
-          <View style={styles.barChartWrap}>
-            {weekBars.map((h, i) => (
-              <View key={weekLabels[i]} style={styles.barCol}>
-                {i === peakIndex && (
-                  <View style={styles.peakBadge}>
-                    <Text style={styles.peakBadgeText}>Peak</Text>
-                  </View>
-                )}
-                <View
-                  style={[
-                    styles.bar,
-                    { height: h, backgroundColor: i === peakIndex ? COLORS.primary : "#C7D6F5" },
-                  ]}
-                />
-                <Text style={styles.barLabel}>{weekLabels[i]}</Text>
-              </View>
-            ))}
-          </View>
-
-          <View style={styles.insightRow}>
-            <Text style={styles.itemMeta}>DELIVERED</Text>
-            <Text style={styles.insightNum}>{deliveredCount || orders.length}</Text>
-          </View>
-          <View style={styles.insightRow}>
-            <Text style={styles.itemMeta}>CANCELLED</Text>
-            <Text style={styles.insightNum}>{cancelledCount}</Text>
-          </View>
-
-          <View style={styles.sectionHeader}>
-            <Text style={styles.cardTitle}>Recent Orders</Text>
-            <TouchableOpacity onPress={() => navigation.navigate("MyOrders")}>
-              <Text style={styles.link}>View All</Text>
-            </TouchableOpacity>
-          </View>
-          <FlatList
-            data={orders.slice(0, 3)}
-            keyExtractor={(i) => String(i.id)}
-            renderItem={renderOrder}
-            scrollEnabled={false}
-            ListEmptyComponent={<Text style={styles.empty}>No recent orders</Text>}
-          />
-        </View>
+              <StatusBadge
+                label={item.status || "PENDING"}
+                status={item.status?.toLowerCase().includes("resolved") ? "ready" : "moderate"}
+              />
+            </SurfaceCard>
+          ))
+        )}
       </ScrollView>
-    </SafeAreaView>
-  );
-}
 
-function LegendRow({ color, label, pct }: { color: string; label: string; pct: number }) {
-  return (
-    <View style={styles.legendRow}>
-      <View style={styles.legendLeft}>
-        <View style={[styles.legendDot, { backgroundColor: color }]} />
-        <Text style={styles.itemTitle}>{label}</Text>
-      </View>
-      <Text style={styles.itemMeta}>{pct}%</Text>
-    </View>
+      {/* Pinned Bottom Nav */}
+      <CustomBottomNav activeTab="MyComplaints" navigation={navigation} />
+    </CosmicBackground>
   );
-}
-
-function toneColor(tone: "blue" | "purple" | "red" | "gray") {
-  switch (tone) {
-    case "blue":
-      return COLORS.primary;
-    case "purple":
-      return "#7C5CFC";
-    case "red":
-      return COLORS.red;
-    default:
-      return COLORS.textMuted;
-  }
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: COLORS.bg },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: 16,
+  headerRefreshBtn: {
+    padding: 8,
+  },
+  scrollContent: {
+    paddingHorizontal: spacing.screenPadding,
     paddingTop: 12,
-    marginBottom: 12,
+    paddingBottom: 32,
   },
-  title: { fontSize: 24, fontWeight: "800", color: COLORS.primaryDark },
-  refreshBtn: { padding: 8 },
-  refreshText: { color: COLORS.primary, fontWeight: "600" },
-
-  sosBanner: {
+  overviewGrid: {
     flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: COLORS.redBg,
-    marginHorizontal: 16,
-    padding: 16,
-    borderRadius: 16,
+    gap: 10,
     marginBottom: 16,
   },
-  sosTitle: { color: COLORS.red, fontWeight: "800", fontSize: 16 },
-  sosSubtitle: { color: COLORS.red, fontSize: 12, marginTop: 4, opacity: 0.8 },
-  sosBtn: { backgroundColor: COLORS.red, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10 },
-  sosBtnText: { color: "#fff", fontWeight: "700", fontSize: 12 },
-
-  summaryRow: { flexDirection: "row", paddingHorizontal: 16, marginBottom: 16, gap: 12 },
-  summaryCard: {
+  metricCard: {
     flex: 1,
-    backgroundColor: COLORS.card,
     padding: 14,
+    alignItems: "center",
+  },
+  metricIconWrap: {
+    width: 40,
+    height: 40,
     borderRadius: 14,
-    shadowColor: "#000",
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    elevation: 2,
-  },
-  summaryLabelTop: { fontSize: 11, color: COLORS.textMuted, fontWeight: "700", marginBottom: 6 },
-  summaryNum: { fontSize: 24, fontWeight: "800", color: COLORS.primaryDark },
-
-  card: {
-    backgroundColor: COLORS.card,
-    marginHorizontal: 16,
-    marginBottom: 16,
-    padding: 16,
-    borderRadius: 18,
-    shadowColor: "#000",
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    elevation: 2,
-  },
-  cardTitle: { fontSize: 16, fontWeight: "800", color: COLORS.primaryDark },
-  cardSubtitle: { fontSize: 12, color: COLORS.textMuted, marginTop: 2, marginBottom: 12 },
-
-  donutRow: { alignItems: "center", marginVertical: 12 },
-  donutOuter: {
-    width: 160,
-    height: 160,
-    borderRadius: 80,
-    borderWidth: 18,
-    borderColor: COLORS.primary,
-    borderRightColor: COLORS.teal,
-    borderBottomColor: COLORS.red,
     alignItems: "center",
     justifyContent: "center",
+    marginBottom: 8,
   },
-  donutInner: { alignItems: "center" },
-  donutTotal: { fontSize: 22, fontWeight: "800", color: COLORS.primaryDark },
-  donutTotalLabel: { fontSize: 10, color: COLORS.textMuted, letterSpacing: 1 },
-
-  legendRow: {
+  metricLabel: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontSize: 11,
+  },
+  metricValue: {
+    ...typography.h3,
+    color: colors.primary,
+    fontSize: 18,
+    marginTop: 2,
+  },
+  sectionCard: {
+    marginBottom: 20,
+    padding: 18,
+  },
+  cardHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 16,
+  },
+  cardHeaderSub: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
+  progressSection: {
+    gap: 14,
+  },
+  progressRow: {
+    gap: 6,
+  },
+  progressLabelCol: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingVertical: 6,
   },
-  legendLeft: { flexDirection: "row", alignItems: "center", gap: 8 },
-  legendDot: { width: 8, height: 8, borderRadius: 4 },
-
-  activityRow: { flexDirection: "row", alignItems: "flex-start", gap: 10, paddingVertical: 8 },
-  activityDot: { width: 8, height: 8, borderRadius: 4, marginTop: 6 },
-
+  progressName: {
+    ...typography.caption,
+    color: colors.textPrimary,
+    fontWeight: "700",
+  },
+  progressCount: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontSize: 11,
+  },
+  progressBarBg: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "rgba(255, 255, 255, 0.06)",
+    overflow: "hidden",
+  },
+  progressBarFill: {
+    height: "100%",
+    borderRadius: 3,
+  },
   sectionHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     marginTop: 8,
-    marginBottom: 8,
-  },
-  link: { color: COLORS.primary, fontWeight: "600" },
-
-  listItem: {
-    backgroundColor: COLORS.bg,
-    padding: 12,
-    borderRadius: 10,
-    marginBottom: 8,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  itemTitle: { fontWeight: "700", color: COLORS.primaryDark },
-  itemMeta: { color: COLORS.textMuted, fontSize: 12 },
-  empty: { color: "#9CA3AF", padding: 12 },
-
-  barChartWrap: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    justifyContent: "space-between",
-    height: 120,
-    marginTop: 8,
     marginBottom: 12,
   },
-  barCol: { alignItems: "center", flex: 1 },
-  bar: { width: 18, borderRadius: 6 },
-  barLabel: { fontSize: 10, color: COLORS.textMuted, marginTop: 6 },
-  peakBadge: {
-    backgroundColor: COLORS.primaryDark,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-    marginBottom: 4,
+  viewAllLink: {
+    ...typography.caption,
+    color: colors.primary,
+    fontWeight: "700",
   },
-  peakBadgeText: { color: "#fff", fontSize: 9, fontWeight: "700" },
-
-  insightRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
+  emptyCard: {
+    padding: 24,
     alignItems: "center",
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-    paddingVertical: 10,
+    justifyContent: "center",
+    marginBottom: 16,
+    gap: 8,
   },
-  insightNum: { fontWeight: "800", fontSize: 16, color: COLORS.primaryDark },
+  emptyText: {
+    ...typography.caption,
+    color: colors.textMuted,
+  },
+  orderItemCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 14,
+    marginBottom: 10,
+  },
+  orderIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: `${colors.primary}18`,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  complaintIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: `${colors.cream}18`,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  itemMeta: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    marginTop: 2,
+  },
 });

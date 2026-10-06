@@ -1,14 +1,16 @@
 """
 Notification Service for TrustTrip
-Handles Expo push notification delivery and logging.
+Handles Expo push notification delivery and logging using Supabase.
 """
 
 import requests
 import json
-from datetime import datetime
-from database import get_db_connection
+import logging
+from datetime import datetime, timezone
+from database import get_supabase
 from config import Config
 
+logger = logging.getLogger(__name__)
 
 # Notification templates with default titles and bodies
 NOTIFICATION_TEMPLATES = {
@@ -37,61 +39,40 @@ NOTIFICATION_TEMPLATES = {
 
 def _get_active_devices(user_id):
     """
-    Fetch all active (is_active=1) push notification tokens for a user.
-    
-    Args:
-        user_id: The user's ID
-        
-    Returns:
-        List of device records with push_token and device_id
+    Fetch all active push notification tokens for a user.
     """
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        
-        cursor.execute("""
-            SELECT device_id, push_token, device_type
-            FROM user_devices
-            WHERE user_id = %s AND is_active = 1
-        """, (user_id,))
-        
-        devices = cursor.fetchall()
-        cursor.close()
-        conn.close()
-        
-        return devices if devices else []
-    
+        supabase = get_supabase()
+        res = (
+            supabase.table("user_devices")
+            .select("device_id, push_token, device_type")
+            .eq("user_id", int(user_id))
+            .eq("is_active", True)
+            .execute()
+        )
+        return res.data or []
     except Exception as e:
-        print(f"Error fetching active devices: {e}")
+        logger.error("Error fetching active devices: %s", e)
         return []
 
 
 def _send_to_expo_api(push_token, title, body, data=None):
     """
     Send a notification to Expo Push Service.
-    
-    Args:
-        push_token: Expo push notification token
-        title: Notification title
-        body: Notification body
-        data: Optional JSON data to send with notification
-        
-    Returns:
-        (success: bool, response: dict)
     """
     if not Config.EXPO_ACCESS_TOKEN:
-        print("WARNING: EXPO_ACCESS_TOKEN not configured. Notification not sent.")
+        logger.warning("EXPO_ACCESS_TOKEN not configured. Notification not sent.")
         return False, {"error": "EXPO_ACCESS_TOKEN not configured"}
-    
+
     expo_url = "https://exp.host/--/api/v2/push/send"
-    
+
     headers = {
         "Host": "exp.host",
         "Accept": "application/json",
         "Accept-Encoding": "gzip, deflate",
         "Content-Type": "application/json",
     }
-    
+
     payload = {
         "to": push_token,
         "sound": "default",
@@ -99,10 +80,10 @@ def _send_to_expo_api(push_token, title, body, data=None):
         "body": body,
         "priority": "high",
     }
-    
+
     if data:
         payload["data"] = data
-    
+
     try:
         response = requests.post(
             expo_url,
@@ -111,329 +92,375 @@ def _send_to_expo_api(push_token, title, body, data=None):
             timeout=10
         )
         response_data = response.json()
-        
+
         if response.status_code == 200 and response_data.get("data"):
             ticket_id = response_data["data"].get("id")
             return True, {"ticket_id": ticket_id, "status": "queued"}
         else:
             return False, response_data
-    
+
     except requests.exceptions.RequestException as e:
-        print(f"Expo API error: {e}")
+        logger.error("Expo API error: %s", e)
         return False, {"error": str(e)}
 
 
 def _log_notification(user_id, device_id, notification_type, title, body, data, expo_status, expo_ticket_id):
     """
     Log notification attempt to database for history/troubleshooting.
-    
-    Args:
-        user_id: User who received notification
-        device_id: Device that received notification (or None)
-        notification_type: Type of notification (e.g., 'welcome', 'equipment_order')
-        title: Notification title
-        body: Notification body
-        data: Structured data sent with notification
-        expo_status: Status from Expo API
-        expo_ticket_id: Expo's ticket ID for tracking
     """
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        data_json = json.dumps(data) if data else None
-        
-        cursor.execute("""
-            INSERT INTO notifications
-            (user_id, device_id, notification_type, title, body, data, expo_response_status, expo_ticket_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        """, (user_id, device_id, notification_type, title, body, data_json, expo_status, expo_ticket_id))
-        
-        conn.commit()
-        cursor.close()
-        conn.close()
-    
+        supabase = get_supabase()
+        payload = {
+            "user_id": int(user_id),
+            "device_id": device_id,
+            "notification_type": notification_type,
+            "title": title,
+            "body": body,
+            "data": data,
+            "expo_response_status": expo_status,
+            "expo_ticket_id": expo_ticket_id
+        }
+        supabase.table("notifications").insert(payload).execute()
     except Exception as e:
-        print(f"Error logging notification: {e}")
+        logger.error("Error logging notification: %s", e)
 
 
 def _mark_device_inactive(device_id):
     """
     Mark a device as inactive when token is invalid/expired.
-    
-    Args:
-        device_id: The device to deactivate
     """
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            UPDATE user_devices
-            SET is_active = 0, updated_at = NOW()
-            WHERE device_id = %s
-        """, (device_id,))
-        
-        conn.commit()
-        cursor.close()
-        conn.close()
-    
+        supabase = get_supabase()
+        supabase.table("user_devices").update({
+            "is_active": False,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }).eq("device_id", int(device_id)).execute()
     except Exception as e:
-        print(f"Error marking device inactive: {e}")
+        logger.error("Error marking device inactive: %s", e)
 
 
 def _update_device_last_used(device_id):
     """
-    Update the last_used_at timestamp for a device (called after successful send).
-    
-    Args:
-        device_id: The device to update
+    Update the last_used_at timestamp for a device.
     """
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            UPDATE user_devices
-            SET last_used_at = NOW(), updated_at = NOW()
-            WHERE device_id = %s
-        """, (device_id,))
-        
-        conn.commit()
-        cursor.close()
-        conn.close()
-    
+        supabase = get_supabase()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        supabase.table("user_devices").update({
+            "last_used_at": now_iso,
+            "updated_at": now_iso
+        }).eq("device_id", int(device_id)).execute()
     except Exception as e:
-        print(f"Error updating device last_used_at: {e}")
+        logger.error("Error updating device last_used_at: %s", e)
 
 
 def send_notification_to_user(user_id, notification_type, notification_data=None):
     """
-    Send a notification to all active devices of a user.
-    
-    Uses template if notification_type is in NOTIFICATION_TEMPLATES,
-    otherwise requires notification_data with title/body.
-    
-    Args:
-        user_id: User to send notification to
-        notification_type: Type of notification (key in NOTIFICATION_TEMPLATES)
-        notification_data: Optional dict with { 'title', 'body', 'data' } or custom data
-        
-    Returns:
-        (success: bool, message: str)
+    Send a notification to a user.
+    Always records the notification in public.notifications regardless of push device registration.
+    Attempts Expo push delivery if active devices exist.
     """
-    # Get template or use provided data
     if notification_type in NOTIFICATION_TEMPLATES:
         template = NOTIFICATION_TEMPLATES[notification_type]
         title = template.get("title", "")
         body = template.get("body", "")
-        data = template.get("data", {})
+        data = dict(template.get("data", {}))
     else:
-        # Use provided data
         if not notification_data:
             return False, f"Unknown notification type '{notification_type}' and no data provided"
-        
+
         title = notification_data.get("title", "TrustTrip")
         body = notification_data.get("body", "")
-        data = notification_data.get("data", {})
-    
-    # Fetch all active devices for this user
+        data = dict(notification_data.get("data", {}))
+
+    if notification_data and "priority" in notification_data:
+        data["priority"] = notification_data["priority"]
+    if notification_data and "deep_link" in notification_data:
+        data["deep_link"] = notification_data["deep_link"]
+
+    supabase = get_supabase()
+    user_id = int(user_id)
+
+    # 1. ALWAYS create the persistent in-app notification in Supabase first
+    notif_payload = {
+        "user_id": user_id,
+        "notification_type": notification_type,
+        "title": title,
+        "body": body,
+        "data": data,
+        "is_read": False,
+        "expo_response_status": "NO_DEVICE_TOKEN"
+    }
+
+    notification_id = None
+    try:
+        res = supabase.table("notifications").insert(notif_payload).execute()
+        if res.data and len(res.data) > 0:
+            notification_id = res.data[0].get("notification_id")
+    except Exception as exc:
+        logger.error("Error creating database notification for user %s: %s", user_id, exc)
+
+    # 2. Attempt push delivery if active devices are registered
     devices = _get_active_devices(user_id)
-    
     if not devices:
-        print(f"No active devices found for user {user_id}")
-        return False, "No active devices registered for this user"
-    
-    # Send to each device
+        logger.info("Notification saved to DB for user %s (no active push devices registered)", user_id)
+        return True, {
+            "database_saved": True,
+            "push_sent": False,
+            "notification_id": notification_id,
+            "status": "NO_DEVICE_TOKEN",
+            "message": "Notification saved to database (no device push token registered)"
+        }
+
     sent_count = 0
     failed_count = 0
-    
+    last_ticket_id = None
+
     for device in devices:
         device_id = device.get("device_id")
         push_token = device.get("push_token")
-        
-        # Send via Expo
+
         success, response = _send_to_expo_api(push_token, title, body, data)
-        
-        # Extract status and ticket ID
-        expo_status = "ok" if success else "error"
+        expo_status = "PUSH_SENT" if success else "PUSH_FAILED"
         expo_ticket_id = response.get("ticket_id") if success else None
-        
-        # Log to database
-        _log_notification(
-            user_id=user_id,
-            device_id=device_id,
-            notification_type=notification_type,
-            title=title,
-            body=body,
-            data=data,
-            expo_status=expo_status,
-            expo_ticket_id=expo_ticket_id
-        )
-        
+
         if success:
-            _update_device_last_used(device_id)
+            last_ticket_id = expo_ticket_id
             sent_count += 1
+            _update_device_last_used(device_id)
         else:
-            # If error is token-related, mark as inactive
+            failed_count += 1
             error_str = str(response)
             if "invalid" in error_str.lower() or "expired" in error_str.lower():
                 _mark_device_inactive(device_id)
-            failed_count += 1
-    
-    # Determine overall success
-    if sent_count > 0:
-        message = f"Notification sent to {sent_count} device(s)"
-        if failed_count > 0:
-            message += f" ({failed_count} failed)"
-        return True, message
-    else:
-        return False, f"Failed to send notification to any device ({failed_count} failures)"
+
+        # Update the created notification row with delivery detail
+        if notification_id:
+            try:
+                supabase.table("notifications").update({
+                    "device_id": device_id,
+                    "expo_response_status": expo_status,
+                    "expo_ticket_id": expo_ticket_id
+                }).eq("notification_id", notification_id).execute()
+            except Exception as update_err:
+                logger.warning("Could not update notification delivery status: %s", update_err)
+
+    status_code = "PUSH_SENT" if sent_count > 0 else "PUSH_FAILED"
+    return True, {
+        "database_saved": True,
+        "push_sent": sent_count > 0,
+        "sent_count": sent_count,
+        "failed_count": failed_count,
+        "ticket_id": last_ticket_id,
+        "notification_id": notification_id,
+        "status": status_code,
+        "message": f"Notification saved to DB and push dispatched to {sent_count} device(s)"
+    }
+
+
+def get_user_notifications(user_id: int, category: str = "all", page: int = 1, page_size: int = 20):
+    """
+    Fetch paginated notifications for a specific user from public.notifications.
+    Supports filtering by category (all, unread, emergency, safety, system, offers).
+    """
+    supabase = get_supabase()
+    user_id = int(user_id)
+    page = max(1, int(page))
+    page_size = max(1, min(100, int(page_size)))
+    offset = (page - 1) * page_size
+
+    try:
+        query = supabase.table("notifications").select("*", count="exact").eq("user_id", user_id)
+
+        cat = (category or "all").strip().lower()
+        if cat == "unread":
+            query = query.eq("is_read", False)
+        elif cat == "emergency":
+            query = query.in_("notification_type", ["emergency", "sos", "emergency_alert", "sos_update"])
+        elif cat == "safety":
+            query = query.in_("notification_type", ["safety", "safety_alert", "crowd_alert", "hazard"])
+        elif cat == "system":
+            query = query.in_("notification_type", ["system", "system_update", "general", "general_announcement", "welcome", "complaint_submitted", "guide_requested"])
+        elif cat == "offers":
+            query = query.in_("notification_type", ["offer", "offers", "discount", "equipment_order"])
+
+        query = query.order("created_at", desc=True).range(offset, offset + page_size - 1)
+        res = query.execute()
+        notifications = res.data or []
+        total_count = res.count if res.count is not None else len(notifications)
+
+        unread_count = get_unread_notification_count(user_id)
+
+        return {
+            "success": True,
+            "notifications": notifications,
+            "total": total_count,
+            "unread_count": unread_count,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": max(1, (total_count + page_size - 1) // page_size)
+        }
+    except Exception as e:
+        logger.error("Error fetching user notifications for %s: %s", user_id, e)
+        return {
+            "success": False,
+            "notifications": [],
+            "total": 0,
+            "unread_count": 0,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": 1,
+            "error": str(e)
+        }
+
+
+def get_unread_notification_count(user_id: int) -> int:
+    """
+    Get unread notification count for a user.
+    """
+    supabase = get_supabase()
+    try:
+        res = (
+            supabase.table("notifications")
+            .select("notification_id", count="exact")
+            .eq("user_id", int(user_id))
+            .eq("is_read", False)
+            .execute()
+        )
+        return res.count if res.count is not None else len(res.data or [])
+    except Exception as e:
+        logger.warning("Error fetching unread notification count for user %s: %s", user_id, e)
+        return 0
+
+
+def mark_notification_as_read(notification_id: int, user_id: int = None) -> bool:
+    """
+    Mark a single notification as read.
+    """
+    supabase = get_supabase()
+    try:
+        query = supabase.table("notifications").update({
+            "is_read": True
+        }).eq("notification_id", int(notification_id))
+        if user_id is not None:
+            query = query.eq("user_id", int(user_id))
+        res = query.execute()
+        return bool(res.data)
+    except Exception as e:
+        logger.error("Error marking notification %s as read: %s", notification_id, e)
+        return False
+
+
+def mark_all_notifications_as_read(user_id: int) -> int:
+    """
+    Mark all unread notifications for a user as read.
+    """
+    supabase = get_supabase()
+    try:
+        res = (
+            supabase.table("notifications")
+            .update({"is_read": True})
+            .eq("user_id", int(user_id))
+            .eq("is_read", False)
+            .execute()
+        )
+        return len(res.data or [])
+    except Exception as e:
+        logger.error("Error marking all notifications as read for user %s: %s", user_id, e)
+        return 0
 
 
 def register_device(user_id, push_token, device_type="android", device_name=None):
     """
     Register a device push token for a user.
-    Handles new tokens and token updates for existing devices.
-    
-    Args:
-        user_id: User who owns the device
-        push_token: Expo push notification token
-        device_type: 'android' or 'ios' (default: 'android')
-        device_name: Optional device name/model
-        
-    Returns:
-        (success: bool, message: str, device_id: int or None)
     """
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        
-        # Check if token already exists for this user
-        cursor.execute("""
-            SELECT device_id FROM user_devices
-            WHERE user_id = %s AND push_token = %s
-        """, (user_id, push_token))
-        
-        existing = cursor.fetchone()
-        
-        if existing:
-            # Token already registered; just update timestamp
-            device_id = existing["device_id"]
-            cursor.execute("""
-                UPDATE user_devices
-                SET is_active = 1, updated_at = NOW(), device_type = %s, device_name = %s
-                WHERE device_id = %s
-            """, (device_type, device_name, device_id))
-            conn.commit()
-            cursor.close()
-            conn.close()
-            return True, "Device token updated (already registered)", device_id
-        
-        # New token; check if token exists for another user (shouldn't happen)
-        cursor.execute("""
-            SELECT device_id FROM user_devices
-            WHERE push_token = %s
-        """, (push_token,))
-        
-        other_device = cursor.fetchone()
-        if other_device:
-            # Token exists for different user; deactivate that one
-            cursor.execute("""
-                UPDATE user_devices
-                SET is_active = 0, updated_at = NOW()
-                WHERE push_token = %s
-            """, (push_token,))
-        
-        # Insert new device
-        cursor.execute("""
-            INSERT INTO user_devices (user_id, push_token, device_type, device_name, is_active)
-            VALUES (%s, %s, %s, %s, 1)
-        """, (user_id, push_token, device_type, device_name))
-        
-        device_id = cursor.lastrowid
-        conn.commit()
-        cursor.close()
-        conn.close()
-        
-        return True, f"Device registered successfully", device_id
-    
-    except Exception as e:
-        print(f"Error registering device: {e}")
-        return False, f"Error registering device: {str(e)}", None
+    user_id = int(user_id)
+    push_token = str(push_token).strip()
+
+    supabase = get_supabase()
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    # Check if token already exists for this user
+    existing_res = (
+        supabase.table("user_devices")
+        .select("device_id")
+        .eq("user_id", user_id)
+        .eq("push_token", push_token)
+        .limit(1)
+        .execute()
+    )
+
+    if existing_res.data:
+        device_id = existing_res.data[0]["device_id"]
+        supabase.table("user_devices").update({
+            "is_active": True,
+            "updated_at": now_iso,
+            "device_type": device_type,
+            "device_name": device_name
+        }).eq("device_id", device_id).execute()
+        return True, "Device token updated (already registered)", device_id
+
+    # Deactivate token if it belongs to another user
+    supabase.table("user_devices").update({
+        "is_active": False,
+        "updated_at": now_iso
+    }).eq("push_token", push_token).execute()
+
+    # Insert new device
+    insert_res = supabase.table("user_devices").insert({
+        "user_id": user_id,
+        "push_token": push_token,
+        "device_type": device_type,
+        "device_name": device_name,
+        "is_active": True
+    }).execute()
+
+    if not insert_res.data:
+        return False, "Failed to register device", None
+
+    device_id = insert_res.data[0]["device_id"]
+    return True, "Device registered successfully", device_id
 
 
 def deactivate_device(device_id, user_id):
     """
     Deactivate a device (soft delete).
-    
-    Args:
-        device_id: Device to deactivate
-        user_id: User who owns the device (for authorization)
-        
-    Returns:
-        (success: bool, message: str)
     """
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        
-        # Verify ownership
-        cursor.execute("""
-            SELECT device_id FROM user_devices
-            WHERE device_id = %s AND user_id = %s
-        """, (device_id, user_id))
-        
-        if not cursor.fetchone():
-            cursor.close()
-            conn.close()
-            return False, "Device not found or access denied"
-        
-        # Deactivate
-        cursor.execute("""
-            UPDATE user_devices
-            SET is_active = 0, updated_at = NOW()
-            WHERE device_id = %s
-        """, (device_id,))
-        
-        conn.commit()
-        cursor.close()
-        conn.close()
-        
-        return True, "Device deactivated successfully"
-    
-    except Exception as e:
-        print(f"Error deactivating device: {e}")
-        return False, f"Error: {str(e)}"
+    user_id = int(user_id)
+    device_id = int(device_id)
+
+    supabase = get_supabase()
+    existing_res = (
+        supabase.table("user_devices")
+        .select("device_id")
+        .eq("device_id", device_id)
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+
+    if not existing_res.data:
+        return False, "Device not found or access denied"
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    supabase.table("user_devices").update({
+        "is_active": False,
+        "updated_at": now_iso
+    }).eq("device_id", device_id).execute()
+
+    return True, "Device deactivated successfully"
 
 
 def get_user_devices(user_id):
     """
     Get all devices for a user.
-    
-    Args:
-        user_id: User to fetch devices for
-        
-    Returns:
-        List of device records
     """
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        
-        cursor.execute("""
-            SELECT device_id, push_token, device_type, device_name, is_active, created_at, updated_at, last_used_at
-            FROM user_devices
-            WHERE user_id = %s
-            ORDER BY updated_at DESC
-        """, (user_id,))
-        
-        devices = cursor.fetchall()
-        cursor.close()
-        conn.close()
-        
-        return devices if devices else []
-    
-    except Exception as e:
-        print(f"Error fetching user devices: {e}")
-        return []
+    supabase = get_supabase()
+    res = (
+        supabase.table("user_devices")
+        .select("device_id, push_token, device_type, device_name, is_active, created_at, updated_at, last_used_at")
+        .eq("user_id", int(user_id))
+        .order("updated_at", desc=True)
+        .execute()
+    )
+    return res.data or []
